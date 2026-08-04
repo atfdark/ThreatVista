@@ -25,11 +25,13 @@ export default function EmployeeProfile() {
   
   // List Mode States
   const [employees, setEmployees] = useState([]);
+  const [aiScores, setAiScores] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
   
   // Detail Mode States
   const [employee, setEmployee] = useState(null);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Load appropriate data
@@ -40,9 +42,16 @@ export default function EmployeeProfile() {
         if (id) {
           const detail = await api.getEmployeeDetail(parseInt(id));
           setEmployee(detail);
+          setAiAnalysis(detail.ai_analysis || null);
         } else {
           const list = await api.getEmployees();
           setEmployees(list);
+          const scores = {};
+          for (const emp of list) {
+            const ai = await api.getAIAnalysis(emp.id);
+            if (ai) scores[emp.id] = ai;
+          }
+          setAiScores(scores);
         }
       } catch (err) {
         console.error("Failed to load employee data", err);
@@ -120,17 +129,21 @@ export default function EmployeeProfile() {
           <div className="flex items-center gap-6 bg-cyber-bg/50 border border-cyber-border px-5 py-3 rounded-lg">
             <div>
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Risk Assessment</span>
-              <span className="text-3xl font-extrabold text-cyber-text font-mono">{employee.risk_score}%</span>
+              <span className="text-3xl font-extrabold text-cyber-text font-mono">
+                {aiAnalysis ? `${aiAnalysis.risk_score}%` : `${employee.risk_score}%`}
+              </span>
             </div>
             <div className="h-10 w-px bg-cyber-border"></div>
             <div>
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Classification</span>
               <span className={`text-xs font-mono px-2 py-0.5 rounded border inline-block mt-1 font-semibold uppercase ${
-                employee.status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
-                employee.status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Critical' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                (aiAnalysis ? aiAnalysis.status : employee.status) === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
                 'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
               }`}>
-                {employee.status}
+                {aiAnalysis ? aiAnalysis.status : employee.status}
               </span>
             </div>
           </div>
@@ -206,22 +219,56 @@ export default function EmployeeProfile() {
               <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4 flex items-center gap-2">
                 <BrainCircuit className="h-4.5 w-4.5 text-cyber-primary" /> Explainable AI (XAI) Recommendation
               </h4>
-              <div className="space-y-4">
-                {getRecommendations(employee.risk_score).map((rec, i) => (
-                  <div key={i} className="p-3 bg-cyber-bg/50 border border-cyber-border rounded-lg space-y-1">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className={`h-4 w-4 shrink-0 ${employee.risk_score > 75 ? 'text-cyber-danger' : 'text-cyber-primary'}`} />
-                      <span className="text-xs font-bold text-cyber-text uppercase font-mono">{rec.action}</span>
-                    </div>
-                    <p className="text-[10px] text-cyber-muted leading-relaxed">{rec.desc}</p>
+              {aiAnalysis ? (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl font-extrabold text-cyber-text font-mono">{aiAnalysis.risk_score}%</span>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-bold ${
+                      aiAnalysis.status === 'Critical' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                      aiAnalysis.status === 'High' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                      aiAnalysis.status === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                      'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
+                    }`}>
+                      {aiAnalysis.status}
+                    </span>
+                    {aiAnalysis.model_anomaly && (
+                      <span className="text-[9px] font-mono px-2 py-0.5 rounded border border-cyber-danger/25 text-cyber-danger bg-cyber-danger/10">
+                        ISOLATION FOREST ANOMALY
+                      </span>
+                    )}
                   </div>
-                ))}
+                  <div className="space-y-2">
+                    <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider">Detected Risk Factors</span>
+                    {aiAnalysis.reasons.map((reason, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <CheckCircle className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${aiAnalysis.risk_score > 75 ? 'text-cyber-danger' : 'text-cyber-primary'}`} />
+                        <span className="text-[11px] text-cyber-text leading-relaxed">{reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {getRecommendations(employee.risk_score).map((rec, i) => (
+                    <div key={i} className="p-3 bg-cyber-bg/50 border border-cyber-border rounded-lg space-y-1">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className={`h-4 w-4 shrink-0 ${employee.risk_score > 75 ? 'text-cyber-danger' : 'text-cyber-primary'}`} />
+                        <span className="text-xs font-bold text-cyber-text uppercase font-mono">{rec.action}</span>
+                      </div>
+                      <p className="text-[10px] text-cyber-muted leading-relaxed">{rec.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {aiAnalysis && (
+              <div className="text-[10.5px] text-cyber-muted font-mono leading-relaxed mt-4 p-3 bg-cyber-border/20 border border-cyber-border rounded">
+                <span className="text-cyber-text font-bold uppercase block mb-1">AI Model Output</span>
+                Isolation Forest raw score: {aiAnalysis.model_score.toFixed(4)} | Anomaly: {aiAnalysis.model_anomaly ? 'Yes' : 'No'}
+                <br/>
+                Recommended: {aiAnalysis.recommendations.slice(0, 2).join('; ')}
               </div>
-            </div>
-            <div className="text-[10.5px] text-cyber-muted font-mono leading-relaxed mt-4 p-3 bg-cyber-border/20 border border-cyber-border rounded">
-              <span className="text-cyber-text font-bold uppercase block mb-1">Anomalous Analysis Summary</span>
-              The model detected severe deviations in file copies and external uploads compared to rolling baseline boundaries. Action triggers recommended.
-            </div>
+            )}
           </div>
         </div>
 
@@ -352,57 +399,62 @@ export default function EmployeeProfile() {
 
       {/* Grid of Employees Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredEmployees.map((emp) => (
-          <div key={emp.id} className="p-6 glass-panel border border-cyber-border/80 flex flex-col justify-between h-56">
-            <div>
-              {/* Header */}
-              <div className="flex justify-between items-start gap-4 mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center font-mono font-bold text-cyber-primary">
-                    {emp.name.split(' ').map(n => n[0]).join('')}
+        {filteredEmployees.map((emp) => {
+          const ai = aiScores[emp.id];
+          const riskScore = ai ? ai.risk_score : emp.risk_score;
+          const status = ai ? ai.status : emp.status;
+          return (
+            <div key={emp.id} className="p-6 glass-panel border border-cyber-border/80 flex flex-col justify-between h-56">
+              <div>
+                {/* Header */}
+                <div className="flex justify-between items-start gap-4 mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center font-mono font-bold text-cyber-primary">
+                      {emp.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-cyber-text text-sm">{emp.name}</h4>
+                      <span className="text-[10px] text-cyber-muted font-mono">{emp.department}</span>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="font-bold text-cyber-text text-sm">{emp.name}</h4>
-                    <span className="text-[10px] text-cyber-muted font-mono">{emp.department}</span>
+                  <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
+                    status === 'Critical' || status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                    status === 'Medium' || status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                    'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
+                  }`}>
+                    {status}
+                  </span>
+                </div>
+
+                {/* Risk Score bar */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[11px] font-mono">
+                    <span className="text-cyber-muted">RISK INDEX</span>
+                    <span className="font-bold text-cyber-text">{riskScore}%</span>
+                  </div>
+                  <div className="w-full bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        riskScore > 75 ? 'bg-cyber-danger' : 
+                        riskScore > 50 ? 'bg-cyber-warning' : 
+                        'bg-cyber-success'
+                      }`}
+                      style={{ width: `${riskScore}%` }}
+                    ></div>
                   </div>
                 </div>
-                <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
-                  emp.status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
-                  emp.status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
-                  'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
-                }`}>
-                  {emp.status}
-                </span>
               </div>
 
-              {/* Risk Score bar */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px] font-mono">
-                  <span className="text-cyber-muted">RISK INDEX</span>
-                  <span className="font-bold text-cyber-text">{emp.risk_score}%</span>
-                </div>
-                <div className="w-full bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full ${
-                      emp.risk_score > 75 ? 'bg-cyber-danger' : 
-                      emp.risk_score > 50 ? 'bg-cyber-warning' : 
-                      'bg-cyber-success'
-                    }`}
-                    style={{ width: `${emp.risk_score}%` }}
-                  ></div>
-                </div>
-              </div>
+              {/* Bottom Navigate button */}
+              <button 
+                onClick={() => navigate(`/employees/${emp.id}`)}
+                className="w-full mt-4 py-2 bg-cyber-border/40 hover:bg-cyber-primary text-cyber-text hover:text-cyber-bg hover:border-cyber-primary rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1 border border-cyber-border transition-all"
+              >
+                ANALYZE BEHAVIOR DNA <ArrowRight className="h-3.5 w-3.5" />
+              </button>
             </div>
-
-            {/* Bottom Navigate button */}
-            <button 
-              onClick={() => navigate(`/employees/${emp.id}`)}
-              className="w-full mt-4 py-2 bg-cyber-border/40 hover:bg-cyber-primary text-cyber-text hover:text-cyber-bg hover:border-cyber-primary rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1 border border-cyber-border transition-all"
-            >
-              ANALYZE BEHAVIOR DNA <ArrowRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
+          );
+        })}
 
         {filteredEmployees.length === 0 && (
           <div className="col-span-full text-center py-16 glass-panel">

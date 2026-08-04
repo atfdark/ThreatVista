@@ -2,6 +2,30 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
+// Authenticated axios instance: attaches the JWT from localStorage to every
+// request and redirects to /login when the token is rejected by the backend.
+const http = axios.create({ baseURL: API_BASE_URL, timeout: 3000 });
+
+http.interceptors.request.use((config) => {
+  const token = localStorage.getItem('threatvista_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+http.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response && err.response.status === 401 && !window.location.pathname.includes('/login')) {
+      localStorage.removeItem('threatvista_token');
+      localStorage.removeItem('threatvista_user');
+      window.location.href = '/login';
+    }
+    return Promise.reject(err);
+  }
+);
+
 export const MOCK_STATS = {
   total_employees: 156,
   high_risk: 2,
@@ -172,10 +196,21 @@ export const MOCK_ANALYTICS = {
   ]
 };
 
+export const MOCK_SETTINGS = {
+  high_risk_threshold: 75,
+  suspicious_threshold: 50,
+  dna_window_days: 14,
+  endpoint_poll_seconds: 60,
+  monitor_files: true,
+  monitor_usb: true,
+  monitor_network: true,
+  monitor_processes: true
+};
+
 export const api = {
   isBackendConnected: async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/status`, { timeout: 2000 });
+      const res = await http.get(`/status`, { timeout: 2000 });
       return res.status === 200;
     } catch {
       return false;
@@ -184,7 +219,7 @@ export const api = {
 
   getStats: async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/dashboard`, { timeout: 2000 });
+      const res = await http.get(`/dashboard`);
       return res.data;
     } catch {
       return MOCK_STATS;
@@ -193,7 +228,7 @@ export const api = {
 
   getEmployees: async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/employees`, { timeout: 2000 });
+      const res = await http.get(`/employees`);
       return res.data;
     } catch {
       return MOCK_EMPLOYEES;
@@ -202,7 +237,7 @@ export const api = {
 
   getEmployeeDetail: async (id) => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/employees/${id}`, { timeout: 2000 });
+      const res = await http.get(`/employees/${id}`);
       return res.data;
     } catch {
       return MOCK_EMPLOYEE_DETAILS[id] || {
@@ -223,7 +258,7 @@ export const api = {
 
   getAlerts: async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/alerts`, { timeout: 2000 });
+      const res = await http.get(`/alerts`);
       return res.data;
     } catch {
       return MOCK_ALERTS;
@@ -232,7 +267,7 @@ export const api = {
 
   getAnalytics: async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/dashboard`, { timeout: 2000 });
+      const res = await http.get(`/dashboard`);
       return {
         ...MOCK_ANALYTICS,
         summary: res.data.summary || res.data,
@@ -246,27 +281,68 @@ export const api = {
 
   getEvents: async (employeeId = null, limit = 20) => {
     try {
-      const url = employeeId ? `${API_BASE_URL}/events?employee_id=${employeeId}&limit=${limit}` : `${API_BASE_URL}/events?limit=${limit}`;
-      const res = await axios.get(url, { timeout: 2000 });
+      const url = employeeId ? `/events?employee_id=${employeeId}&limit=${limit}` : `/events?limit=${limit}`;
+      const res = await http.get(url);
       return res.data;
     } catch {
       return [];
     }
   },
 
+  getAIAnalysis: async (employeeId) => {
+    try {
+      const res = await http.get(`/ai/analysis/${employeeId}`);
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  analyzeEmployee: async (employeeId) => {
+    try {
+      const res = await http.post(`/ai/analyze/${employeeId}`);
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  // --- Settings (persisted to backend) ---
+  getSettings: async () => {
+    try {
+      const res = await http.get(`/settings`);
+      return res.data;
+    } catch {
+      return MOCK_SETTINGS;
+    }
+  },
+
+  saveSettings: async (settings) => {
+    const res = await http.put(`/settings`, settings);
+    return res.data;
+  },
+
+  // --- Alert status transitions (persisted to backend) ---
+  updateAlertStatus: async (alertId, status) => {
+    const res = await http.patch(`/alerts/${alertId}`, { status });
+    return res.data;
+  },
+
   login: async (username, password) => {
     try {
-      const res = await axios.post(`${API_BASE_URL}/auth/login`, { username, password }, { timeout: 2000 });
+      const res = await http.post(`/auth/login`, { username, password });
       return res.data;
     } catch (err) {
       if (err.response && err.response.status === 401) {
         throw new Error("Invalid username or password");
       }
+      // Offline fallback so the demo can still be shown without a backend.
       if (username === "admin" && password === "admin123") {
         return {
           access_token: "mock_jwt_token_threatvista_admin",
           token_type: "bearer",
-          username: username
+          username: username,
+          role: "admin"
         };
       }
       throw new Error("Connection failed. Use admin / admin123");

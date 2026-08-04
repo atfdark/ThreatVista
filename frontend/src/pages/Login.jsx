@@ -18,6 +18,10 @@ export default function Login() {
     try {
       const data = await api.login(username, password);
       localStorage.setItem('threatvista_token', data.access_token);
+      localStorage.setItem('threatvista_user', JSON.stringify({
+        username: data.username || username,
+        role: data.role || 'admin'
+      }));
       navigate('/');
     } catch (err) {
       setError(err.message || 'Authentication failed');
@@ -102,8 +106,8 @@ export default function Login() {
           <Info className="h-4.5 w-4.5 text-cyber-secondary shrink-0 mt-0.5" />
           <div className="text-[11px] font-mono leading-relaxed">
             <span className="text-cyber-text font-semibold">Demo Credentials:</span>
-            <div className="mt-1">Username: <span className="text-cyber-primary">admin</span></div>
-            <div>Password: <span className="text-cyber-primary">admin123</span></div>
+            <div className="mt-1">Administrator: <span className="text-cyber-primary">admin / admin123</span></div>
+            <div>Security Analyst: <span className="text-cyber-primary">analyst / analyst123</span></div>
           </div>
         </div>
       </div>

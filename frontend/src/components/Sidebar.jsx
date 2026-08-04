@@ -17,6 +17,13 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const [dbConnected, setDbConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('threatvista_user') || '{}');
+    } catch {
+      return {};
+    }
+  });
 
   const checkConnection = async () => {
     setLoading(true);
@@ -33,8 +40,13 @@ export default function Sidebar() {
 
   const handleLogout = () => {
     localStorage.removeItem('threatvista_token');
+    localStorage.removeItem('threatvista_user');
     navigate('/login');
   };
+
+  const displayName = user.username ? user.username.charAt(0).toUpperCase() + user.username.slice(1) : 'Administrator';
+  const initials = (user.username || 'AD').slice(0, 2).toUpperCase();
+  const roleLabel = user.role === 'analyst' ? 'Security Analyst' : 'SOC Administrator';
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -108,11 +120,11 @@ export default function Sidebar() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-full bg-cyber-primary/10 border border-cyber-primary/30 flex items-center justify-center font-mono font-bold text-cyber-primary text-sm">
-              AD
+              {initials}
             </div>
             <div>
-              <p className="text-xs font-semibold text-cyber-text">Administrator</p>
-              <p className="text-[10px] text-cyber-muted font-mono">Level 1 SOC</p>
+              <p className="text-xs font-semibold text-cyber-text">{displayName}</p>
+              <p className="text-[10px] text-cyber-muted font-mono">{roleLabel}</p>
             </div>
           </div>
           <button 

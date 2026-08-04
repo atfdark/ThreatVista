@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Settings as SettingsIcon, Save, ShieldAlert, Cpu, Database, Bell } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings as SettingsIcon, Save, ShieldAlert, Cpu, Database, Bell, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { api } from '../services/mockData';
 
 export default function Settings() {
   const [highRiskVal, setHighRiskVal] = useState(75);
@@ -12,20 +13,75 @@ export default function Settings() {
     network: true,
     processes: true
   });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const cfg = await api.getSettings();
+        if (!mounted) return;
+        setHighRiskVal(cfg.high_risk_threshold ?? 75);
+        setSuspiciousVal(cfg.suspicious_threshold ?? 50);
+        setDnaWindow(cfg.dna_window_days ?? 14);
+        setEndpointPoll(cfg.endpoint_poll_seconds ?? 60);
+        setMonitoringToggles({
+          files: cfg.monitor_files ?? true,
+          usb: cfg.monitor_usb ?? true,
+          network: cfg.monitor_network ?? true,
+          processes: cfg.monitor_processes ?? true
+        });
+      } catch (err) {
+        console.error("Failed to load settings", err);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const handleToggle = (key) => {
-    setMonitoringToggles(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
+    setMonitoringToggles(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setSaving(true);
+    setSaved(false);
+    setSaveError('');
+    try {
+      await api.saveSettings({
+        high_risk_threshold: highRiskVal,
+        suspicious_threshold: suspiciousVal,
+        dna_window_days: dnaWindow,
+        endpoint_poll_seconds: endpointPoll,
+        monitor_files: monitoringToggles.files,
+        monitor_usb: monitoringToggles.usb,
+        monitor_network: monitoringToggles.network,
+        monitor_processes: monitoringToggles.processes
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 4000);
+    } catch (err) {
+      setSaveError(err?.response?.data?.detail || 'Failed to save configuration.');
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex h-[70vh] items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 border-4 border-cyber-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-xs font-mono text-cyber-muted uppercase tracking-widest">LOADING ENGINE CONFIGURATION...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -50,10 +106,10 @@ export default function Settings() {
                 <span className="text-cyber-text font-semibold">HIGH RISK CLASSIFICATION THRESHOLD</span>
                 <span className="text-cyber-danger font-bold">{highRiskVal}%</span>
               </div>
-              <input 
-                type="range" 
-                min="60" 
-                max="95" 
+              <input
+                type="range"
+                min="60"
+                max="95"
                 value={highRiskVal}
                 onChange={(e) => setHighRiskVal(parseInt(e.target.value))}
                 className="w-full h-1.5 bg-cyber-bg rounded-lg appearance-none cursor-pointer accent-cyber-danger border border-cyber-border"
@@ -67,10 +123,10 @@ export default function Settings() {
                 <span className="text-cyber-text font-semibold">SUSPICIOUS CLASSIFICATION THRESHOLD</span>
                 <span className="text-cyber-warning font-bold">{suspiciousVal}%</span>
               </div>
-              <input 
-                type="range" 
-                min="30" 
-                max="59" 
+              <input
+                type="range"
+                min="30"
+                max="59"
                 value={suspiciousVal}
                 onChange={(e) => setSuspiciousVal(parseInt(e.target.value))}
                 className="w-full h-1.5 bg-cyber-bg rounded-lg appearance-none cursor-pointer accent-cyber-warning border border-cyber-border"
@@ -90,8 +146,8 @@ export default function Settings() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="block text-xs font-mono uppercase text-cyber-muted">Behavior DNA Rolling Baseline (Days)</label>
-              <select 
-                value={dnaWindow} 
+              <select
+                value={dnaWindow}
                 onChange={(e) => setDnaWindow(parseInt(e.target.value))}
                 className="w-full p-2.5 bg-cyber-bg border border-cyber-border rounded-lg text-xs font-mono text-cyber-text focus:outline-none focus:border-cyber-primary"
               >
@@ -104,8 +160,8 @@ export default function Settings() {
 
             <div className="space-y-2">
               <label className="block text-xs font-mono uppercase text-cyber-muted">Endpoint Heartbeat Rate (Seconds)</label>
-              <select 
-                value={endpointPoll} 
+              <select
+                value={endpointPoll}
                 onChange={(e) => setEndpointPoll(parseInt(e.target.value))}
                 className="w-full p-2.5 bg-cyber-bg border border-cyber-border rounded-lg text-xs font-mono text-cyber-text focus:outline-none focus:border-cyber-primary"
               >
@@ -159,14 +215,21 @@ export default function Settings() {
         <div className="flex items-center gap-4">
           <button
             type="submit"
-            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-xs tracking-wider transition-all focus:outline-none hover:scale-[1.01]"
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-xs tracking-wider transition-all focus:outline-none hover:scale-[1.01] disabled:opacity-50"
           >
-            <Save className="h-4 w-4" /> SAVE ENGINE CONFIGURATION
+            <Save className="h-4 w-4" /> {saving ? 'SAVING...' : 'SAVE ENGINE CONFIGURATION'}
           </button>
 
           {saved && (
             <div className="flex items-center gap-1.5 text-cyber-success font-mono text-xs uppercase animate-pulse">
-              <Bell className="h-4 w-4" /> Config changes written to SQLite database!
+              <CheckCircle2 className="h-4 w-4" /> Configuration saved to database
+            </div>
+          )}
+
+          {saveError && (
+            <div className="flex items-center gap-1.5 text-cyber-danger font-mono text-xs uppercase">
+              <AlertCircle className="h-4 w-4" /> {saveError}
             </div>
           )}
         </div>

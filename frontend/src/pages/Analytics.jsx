@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, CartesianGrid, Legend } from 'recharts';
-import { BarChart3, ShieldAlert, Cpu, HardDrive, Network } from 'lucide-react';
+import { BarChart3, ShieldAlert, Cpu, HardDrive, Network, BrainCircuit } from 'lucide-react';
 import { api } from '../services/mockData';
 
 export default function Analytics() {
@@ -73,6 +73,42 @@ export default function Analytics() {
             <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Network Evaluators</span>
             <span className="text-xl font-bold text-cyber-text block mt-0.5">TCP Socket Listeners</span>
             <span className="text-[9px] text-cyber-muted font-mono">Upload bandwidth tracking</span>
+          </div>
+        </div>
+      </div>
+
+      {/* AI Model Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="p-5 glass-panel flex items-center gap-4">
+          <div className="p-3 bg-cyber-accent/10 border border-cyber-accent/20 text-cyber-accent rounded-lg shrink-0">
+            <BrainCircuit className="h-6 w-6" />
+          </div>
+          <div>
+            <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Anomaly Detection Model</span>
+            <span className="text-xl font-bold text-cyber-text block mt-0.5">Isolation Forest</span>
+            <span className="text-[9px] text-cyber-muted font-mono">Unsupervised behavioral analysis</span>
+          </div>
+        </div>
+
+        <div className="p-5 glass-panel flex items-center gap-4">
+          <div className="p-3 bg-cyber-primary/10 border border-cyber-primary/20 text-cyber-primary rounded-lg shrink-0">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <div>
+            <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">AI Alerts Generated</span>
+            <span className="text-xl font-bold text-cyber-text block mt-0.5">{analytics?.severity_distribution?.reduce((a,b)=>a+b.count,0) || 0}</span>
+            <span className="text-[9px] text-cyber-muted font-mono">Rule + AI correlation</span>
+          </div>
+        </div>
+
+        <div className="p-5 glass-panel flex items-center gap-4">
+          <div className="p-3 bg-cyber-success/10 border border-cyber-success/20 text-cyber-success rounded-lg shrink-0">
+            <Activity className="h-6 w-6" />
+          </div>
+          <div>
+            <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Model Status</span>
+            <span className="text-xl font-bold text-cyber-text block mt-0.5">Active</span>
+            <span className="text-[9px] text-cyber-muted font-mono">Real-time inference</span>
           </div>
         </div>
       </div>

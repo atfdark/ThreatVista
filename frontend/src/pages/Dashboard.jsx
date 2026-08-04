@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [recentEvents, setRecentEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
+  const [aiScores, setAiScores] = useState({});
 
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
@@ -36,6 +37,20 @@ export default function Dashboard() {
   useEffect(() => {
     setWsConnected(isConnected);
   }, [isConnected]);
+
+  useEffect(() => {
+    async function loadAI() {
+      if (employees.length) {
+        const scores = {};
+        for (const emp of employees.slice(0, 4)) {
+          const ai = await api.getAIAnalysis(emp.id);
+          if (ai) scores[emp.id] = ai;
+        }
+        setAiScores(scores);
+      }
+    }
+    loadAI();
+  }, [employees]);
 
   useEffect(() => {
     async function loadData() {
@@ -206,52 +221,57 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-cyber-border">
-              {employees.slice(0, 4).map((emp) => (
-                <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
-                  <td className="py-3.5 pl-4 flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-full bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center font-mono font-bold text-cyber-primary">
-                      {emp.name.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <div>
-                      <span className="font-semibold text-cyber-text block">{emp.name}</span>
-                      <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
-                    </div>
-                  </td>
-                  <td className="py-3.5 font-medium text-cyber-muted">{emp.department}</td>
-                  <td className="py-3.5">
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full ${
-                            emp.risk_score > 75 ? 'bg-cyber-danger' : 
-                            emp.risk_score > 50 ? 'bg-cyber-warning' : 
-                            'bg-cyber-success'
-                          }`}
-                          style={{ width: `${emp.risk_score}%` }}
-                        ></div>
+              {employees.slice(0, 4).map((emp) => {
+                const ai = aiScores[emp.id];
+                const riskScore = ai ? ai.risk_score : emp.risk_score;
+                const status = ai ? ai.status : emp.status;
+                return (
+                  <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
+                    <td className="py-3.5 pl-4 flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center font-mono font-bold text-cyber-primary">
+                        {emp.name.split(' ').map(n => n[0]).join('')}
                       </div>
-                      <span className="font-mono font-semibold">{emp.risk_score}%</span>
-                    </div>
-                  </td>
-                  <td className="py-3.5">
-                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
-                      emp.status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
-                      emp.status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
-                      'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
-                    }`}>
-                      {emp.status}
-                    </span>
-                  </td>
-                  <td className="py-3.5 text-right pr-4">
-                    <button 
-                      onClick={() => navigate(`/employees/${emp.id}`)}
-                      className="px-3 py-1.5 bg-cyber-primary/10 border border-cyber-primary/25 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg rounded text-[11px] font-mono font-bold transition-all"
-                    >
-                      DNA PROFILE
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      <div>
+                        <span className="font-semibold text-cyber-text block">{emp.name}</span>
+                        <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
+                      </div>
+                    </td>
+                    <td className="py-3.5 font-medium text-cyber-muted">{emp.department}</td>
+                    <td className="py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-24 bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full ${
+                              riskScore > 75 ? 'bg-cyber-danger' : 
+                              riskScore > 50 ? 'bg-cyber-warning' : 
+                              'bg-cyber-success'
+                            }`}
+                            style={{ width: `${riskScore}%` }}
+                          ></div>
+                        </div>
+                        <span className="font-mono font-semibold">{riskScore}%</span>
+                      </div>
+                    </td>
+                    <td className="py-3.5">
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
+                        status === 'Critical' || status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                        status === 'Medium' || status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                        'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
+                      }`}>
+                        {status}
+                      </span>
+                    </td>
+                    <td className="py-3.5 text-right pr-4">
+                      <button 
+                        onClick={() => navigate(`/employees/${emp.id}`)}
+                        className="px-3 py-1.5 bg-cyber-primary/10 border border-cyber-primary/25 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg rounded text-[11px] font-mono font-bold transition-all"
+                      >
+                        DNA PROFILE
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -6,7 +6,34 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from backend.database.connection import engine, Base, SessionLocal
-from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile
+from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile, SystemConfig
+from backend.auth import hash_password, verify_password
+
+def ensure_admin_hash(db):
+    """Migrate a legacy mock password hash to a real bcrypt hash."""
+    admin = db.query(User).filter(User.username == "admin").first()
+    if admin and not admin.password_hash.startswith("$2"):
+        try:
+            admin.password_hash = hash_password("admin123")
+            db.commit()
+            print("[+] Migrated admin password hash to bcrypt.")
+        except Exception as e:
+            print(f"[!] Could not migrate admin hash: {e}")
+
+
+def ensure_analyst(db):
+    """Ensure the demo 'analyst' account exists (role-based access control)."""
+    if db.query(User).filter(User.username == "analyst").first() is None:
+        db.add(User(username="analyst", password_hash=hash_password("analyst123"), role="analyst"))
+        db.commit()
+        print("[+] Seeded 'analyst' demo account.")
+
+def ensure_system_config(db):
+    """Ensure a SystemConfig row exists (created with defaults)."""
+    if db.query(SystemConfig).first() is None:
+        db.add(SystemConfig())
+        db.commit()
+        print("[+] Seeded system configuration defaults.")
 
 def init_db():
     print("Initializing SQLite database...")
@@ -15,8 +42,14 @@ def init_db():
 
     db = SessionLocal()
     try:
-        # Check if database is already seeded
-        if db.query(User).first() is not None:
+        # Idempotency: always ensure config, valid admin hash, and demo roles exist.
+        ensure_system_config(db)
+        ensure_admin_hash(db)
+        ensure_analyst(db)
+
+        # Check if core dataset is already seeded (employees, not just users —
+        # the demo role accounts above are always ensured).
+        if db.query(Employee).first() is not None:
             print("Database already contains data. Skipping seeding.")
             return
 
@@ -25,10 +58,11 @@ def init_db():
         # 1. Admin Users
         admin = User(
             username="admin",
-            password_hash="pbkdf2:sha256:150000$mock_hash_for_admin_123", # simplified hash
+            password_hash=hash_password("admin123"),
             role="admin"
         )
         db.add(admin)
+        # NOTE: the 'analyst' demo account is ensured separately (ensure_analyst).
 
         # 2. Employees
         rahul = Employee(
@@ -166,6 +200,16 @@ def init_db():
                 usb_status="Generic Flash Device",
                 details="Unrecognized USB Device connected",
                 timestamp=now - timedelta(hours=17.2)
+            ),
+            Event(
+                employee_id=amit.id,
+                event_type="file_copy",
+                filename="sales_pipeline.xlsx",
+                extension=".xlsx",
+                size="3.8MB",
+                folder="Sales",
+                details="Copied 12 files to USB during out-of-hours session",
+                timestamp=now - timedelta(hours=17)
             )
         ])
 

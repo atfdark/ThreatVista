@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from backend.database.connection import Base
@@ -88,3 +88,23 @@ class BehaviorProfile(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     employee = relationship("Employee", back_populates="behavior_profile")
+
+
+class SystemConfig(Base):
+    """Single-row configuration table for the ThreatVista engine.
+
+    Risk index thresholds and telemetry module toggles are persisted here so
+    the Settings page has a real effect on classification and ingestion.
+    """
+    __tablename__ = "system_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    high_risk_threshold = Column(Integer, default=75)
+    suspicious_threshold = Column(Integer, default=50)
+    dna_window_days = Column(Integer, default=14)
+    endpoint_poll_seconds = Column(Integer, default=60)
+    monitor_files = Column(Boolean, default=True)
+    monitor_usb = Column(Boolean, default=True)
+    monitor_network = Column(Boolean, default=True)
+    monitor_processes = Column(Boolean, default=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
