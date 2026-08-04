@@ -1,0 +1,303 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { 
+  Users, 
+  AlertTriangle, 
+  Activity, 
+  TrendingUp, 
+  ShieldAlert, 
+  ChevronRight,
+  ArrowRight,
+  Database,
+  Radio
+} from 'lucide-react';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid } from 'recharts';
+import { api } from '../services/mockData';
+import { useWebSocket } from '../services/websocket';
+
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const [stats, setStats] = useState(null);
+  const [employees, setEmployees] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [recentEvents, setRecentEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [wsConnected, setWsConnected] = useState(false);
+
+  const { isConnected } = useWebSocket((message) => {
+    if (message.type === 'new_event') {
+      setRecentEvents(prev => [message.data, ...prev].slice(0, 10));
+    } else if (message.type === 'new_alert') {
+      setAlerts(prev => [message.data, ...prev].slice(0, 3));
+    }
+  });
+
+  useEffect(() => {
+    setWsConnected(isConnected);
+  }, [isConnected]);
+
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      try {
+        const statsData = await api.getStats();
+        const empsData = await api.getEmployees();
+        const alertsData = await api.getAlerts();
+        const analyticsData = await api.getAnalytics();
+        const eventsData = await api.getEvents(null, 10);
+
+        setStats(statsData);
+        setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
+        setAlerts(alertsData.slice(0, 3));
+        setAnalytics(analyticsData);
+        setRecentEvents(eventsData || []);
+      } catch (err) {
+        console.error("Failed to load dashboard data", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex h-[70vh] items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-10 w-10 border-4 border-cyber-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-xs font-mono text-cyber-muted uppercase tracking-widest">LOADING COMMAND OVERVIEW...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const totalEmployees = stats?.total_employees || 156;
+  const highRisk = stats?.high_risk || 2;
+  const activeAlerts = stats?.active_alerts || 6;
+  const averageRisk = stats?.average_risk || 18;
+
+  const statCards = [
+    { label: 'Total Employees', value: totalEmployees, sub: 'Active Monitoring', icon: Users, color: 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' },
+    { label: 'High Risk Users', value: highRisk, sub: 'Immediate Action Required', icon: ShieldAlert, color: 'text-cyber-danger border-cyber-danger/30 bg-cyber-danger/5 animate-pulse' },
+    { label: 'Active Threat Alerts', value: activeAlerts, sub: 'Requires Review', icon: AlertTriangle, color: 'text-cyber-warning border-cyber-warning/20 bg-cyber-warning/5' },
+    { label: 'Average Risk Score', value: `${averageRisk}%`, sub: 'Healthy Baseline', icon: TrendingUp, color: 'text-cyber-success border-cyber-success/20 bg-cyber-success/5' },
+  ];
+
+  return (
+    <div className="space-y-8 animate-fade-in">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Security Command Center</h2>
+          <p className="text-xs text-cyber-muted font-mono mt-1 uppercase tracking-wider">LATEST SECURITY STANDINGS & ANOMALIES</p>
+        </div>
+        <div className="flex items-center gap-2 bg-cyber-card border border-cyber-border px-3 py-1.5 rounded-lg text-xs font-mono">
+          <Radio className={`h-4 w-4 ${wsConnected ? 'text-cyber-success animate-pulse' : 'text-cyber-muted'}`} />
+          <span className="text-cyber-text">{wsConnected ? 'LIVE FEED ACTIVE' : 'OFFLINE MODE'}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {statCards.map((card, i) => {
+          const Icon = card.icon;
+          return (
+            <div key={i} className={`p-6 border rounded-xl glass-panel relative overflow-hidden group ${card.color}`}>
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-xs font-mono uppercase text-cyber-muted tracking-wider">{card.label}</p>
+                  <h3 className="text-3xl font-extrabold mt-2 text-cyber-text">{card.value}</h3>
+                </div>
+                <div className="p-2.5 rounded-lg bg-cyber-bg border border-cyber-border">
+                  <Icon className="h-5 w-5" />
+                </div>
+              </div>
+              <p className="text-[10px] text-cyber-muted mt-3 font-mono tracking-wider">{card.sub}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 p-6 glass-panel flex flex-col">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Anomalous Telemetry Volume</h4>
+              <p className="text-xs text-cyber-muted">Daily USB connections, network uploads (MB) and file edits</p>
+            </div>
+            <span className="text-[10px] bg-cyber-primary/10 border border-cyber-primary/20 text-cyber-primary px-2.5 py-1 rounded font-mono">7-DAY SUMMARY</span>
+          </div>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={analytics?.device_activity || []}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
+                <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} />
+                <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#0f1626', borderColor: '#1e293b', borderRadius: 8, fontSize: 11 }}
+                  itemStyle={{ color: '#f8fafc' }}
+                />
+                <Bar dataKey="usb" fill="#06b6d4" name="USB Inserts" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="network" fill="#3b82f6" name="Upload Vol (MB)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="files" fill="#a855f7" name="Files Copied" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="p-6 glass-panel flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-center mb-6">
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono">High Risk Alerts</h4>
+              <span className="text-[10px] text-cyber-danger animate-pulse font-mono font-bold">LATEST EVENTS</span>
+            </div>
+            <div className="space-y-4">
+              {alerts.map((alert) => (
+                <div key={alert.id} className="p-3 bg-cyber-bg/50 border border-cyber-border rounded-lg space-y-1.5 hover:border-cyber-primary/30 transition-colors">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-semibold text-cyber-text">{alert.employee.name}</span>
+                    <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase ${
+                      alert.severity === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                      alert.severity === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                      'text-cyber-secondary bg-cyber-secondary/10 border-cyber-secondary/25'
+                    }`}>
+                      {alert.severity}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-cyber-muted line-clamp-2 leading-relaxed">{alert.reason}</p>
+                  <p className="text-[9px] text-cyber-muted font-mono pt-1">
+                    {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button 
+            onClick={() => navigate('/alerts')}
+            className="w-full mt-6 py-2 bg-cyber-border/40 hover:bg-cyber-border/80 border border-cyber-border rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1 text-cyber-text transition-colors"
+          >
+            VIEW ALL ALERTS <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6 glass-panel">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Monitored Employee Rankings</h4>
+            <p className="text-xs text-cyber-muted">Overview of active employees sorted by risk score</p>
+          </div>
+          <button 
+            onClick={() => navigate('/employees')}
+            className="text-xs text-cyber-primary font-mono font-bold flex items-center gap-1 hover:underline"
+          >
+            MANAGE EMPLOYEES <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-cyber-border text-cyber-muted uppercase font-mono text-[10px] tracking-wider">
+                <th className="pb-3 pl-4">Employee</th>
+                <th className="pb-3">Department</th>
+                <th className="pb-3">Risk Assessment</th>
+                <th className="pb-3">Classification</th>
+                <th className="pb-3 text-right pr-4">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-cyber-border">
+              {employees.slice(0, 4).map((emp) => (
+                <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
+                  <td className="py-3.5 pl-4 flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center font-mono font-bold text-cyber-primary">
+                      {emp.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div>
+                      <span className="font-semibold text-cyber-text block">{emp.name}</span>
+                      <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
+                    </div>
+                  </td>
+                  <td className="py-3.5 font-medium text-cyber-muted">{emp.department}</td>
+                  <td className="py-3.5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-24 bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full ${
+                            emp.risk_score > 75 ? 'bg-cyber-danger' : 
+                            emp.risk_score > 50 ? 'bg-cyber-warning' : 
+                            'bg-cyber-success'
+                          }`}
+                          style={{ width: `${emp.risk_score}%` }}
+                        ></div>
+                      </div>
+                      <span className="font-mono font-semibold">{emp.risk_score}%</span>
+                    </div>
+                  </td>
+                  <td className="py-3.5">
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
+                      emp.status === 'High Risk' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                      emp.status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                      'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
+                    }`}>
+                      {emp.status}
+                    </span>
+                  </td>
+                  <td className="py-3.5 text-right pr-4">
+                    <button 
+                      onClick={() => navigate(`/employees/${emp.id}`)}
+                      className="px-3 py-1.5 bg-cyber-primary/10 border border-cyber-primary/25 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg rounded text-[11px] font-mono font-bold transition-all"
+                    >
+                      DNA PROFILE
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="p-6 glass-panel">
+        <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4">Live Metadata Stream</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-cyber-border text-cyber-muted font-mono uppercase text-[9px] tracking-wider">
+                <th className="pb-3 pl-3">Event Type</th>
+                <th className="pb-3">Details</th>
+                <th className="pb-3 text-right pr-3">Timestamp</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-cyber-border/40 font-mono">
+              {recentEvents.slice(0, 10).map((evt) => (
+                <tr key={evt.id} className="hover:bg-cyber-border/10">
+                  <td className="py-2.5 pl-3">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${
+                      evt.event_type === 'usb_insert' ? 'text-cyber-primary border-cyber-primary/20 bg-cyber-primary/5' :
+                      evt.event_type === 'file_copy' ? 'text-cyber-accent border-cyber-accent/20 bg-cyber-accent/5' :
+                      evt.event_type === 'network_upload' ? 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' :
+                      'text-cyber-muted border-cyber-border bg-cyber-bg/50'
+                    }`}>
+                      {evt.event_type.replace('_', ' ')}
+                    </span>
+                  </td>
+                  <td className="py-2.5 text-xs text-cyber-text">{evt.details || '-'}</td>
+                  <td className="py-2.5 text-right pr-3 text-cyber-muted text-[10px]">
+                    {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </td>
+                </tr>
+              ))}
+              {recentEvents.length === 0 && (
+                <tr>
+                  <td colSpan="3" className="text-center py-8 text-cyber-muted text-xs font-mono">
+                    NO TELEMETRY EVENTS COLLECTED YET
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
