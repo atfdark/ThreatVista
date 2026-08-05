@@ -89,7 +89,10 @@
 
 .scanline-overlay {
   position: relative;
-  overflow: hidden;
+  /* No overflow constraint here: `overflow: hidden` here used to beat the
+     Tailwind `overflow-y-auto` utility on the main scroll container and
+     silently disabled vertical scrolling on every page. The scanline
+     ::before uses inset:0, so it never overflows and needs no clipping. */
 }
 
 .scanline-overlay::before {

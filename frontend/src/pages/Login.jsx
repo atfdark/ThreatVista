@@ -31,7 +31,7 @@ export default function Login() {
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-cyber-bg cyber-grid relative scanline-overlay">
+    <div className="flex min-h-screen items-center justify-center bg-cyber-bg cyber-grid relative scanline-overlay py-8">
       {/* Decorative ambient glowing backdrops */}
       <div className="absolute top-1/4 left-1/4 h-72 w-72 rounded-full bg-cyber-primary/10 blur-[100px] pointer-events-none"></div>
       <div className="absolute bottom-1/4 right-1/4 h-72 w-72 rounded-full bg-cyber-secondary/10 blur-[100px] pointer-events-none"></div>
