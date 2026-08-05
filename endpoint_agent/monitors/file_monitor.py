@@ -1,8 +1,27 @@
 import os
 import time
+import threading
 from datetime import datetime
+import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileDeletedEvent, FileModifiedEvent, FileMovedEvent
+
+def get_removable_drive_paths():
+    """Return root paths of currently-connected removable drives (USB sticks).
+
+    psutil marks Windows removable disks (DriveType=2) with an 'removable' opts
+    flag — the same drive class the USB monitor reports as usb_insert. On
+    Linux/macOS this list is simply empty, which is harmless.
+    """
+    paths = []
+    try:
+        for part in psutil.disk_partitions():
+            opts = (part.opts or "").split(",")
+            if "removable" in opts and os.path.isdir(part.mountpoint):
+                paths.append(part.mountpoint)
+    except Exception as exc:
+        print(f"Removable drive scan error: {exc}")
+    return paths
 
 class ThreatFileHandler(FileSystemEventHandler):
     def __init__(self, callback, monitored_paths=None):
@@ -47,8 +66,33 @@ class ThreatFileHandler(FileSystemEventHandler):
 def start_file_monitoring(callback):
     observer = Observer()
     handler = ThreatFileHandler(callback)
-    for path in handler.monitored_paths:
-        if os.path.exists(path):
+    scheduled = set()
+
+    def schedule(path):
+        """Schedule a directory tree on the observer exactly once."""
+        if path in scheduled or not os.path.isdir(path):
+            return
+        try:
             observer.schedule(handler, path, recursive=True)
+            scheduled.add(path)
+            print(f"[+] Watching {path}")
+        except Exception as exc:
+            print(f"[-] Failed to watch {path}: {exc}")
+
+    for path in handler.monitored_paths:
+        schedule(path)
+    for path in get_removable_drive_paths():
+        schedule(path)
+
+    # Poll for USB drives appearing after startup (drive letters are assigned
+    # at mount time) and add them to the watch so mass copies to USB produce
+    # file_create events for the correlation engine.
+    def poll_drives():
+        while True:
+            time.sleep(5)
+            for path in get_removable_drive_paths():
+                schedule(path)
+
+    threading.Thread(target=poll_drives, daemon=True).start()
     observer.start()
     return observer

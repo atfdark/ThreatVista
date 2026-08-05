@@ -9,6 +9,7 @@ import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import Audit from './pages/Audit';
+import ActiveSessions from './pages/ActiveSessions';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Dashboard />} />
+          <Route path="sessions" element={<ActiveSessions />} />
           <Route path="employees" element={<EmployeeProfile />} />
           <Route path="employees/:id" element={<EmployeeProfile />} />
           <Route path="alerts" element={<Alerts />} />

@@ -11,7 +11,8 @@ import {
   Database,
   RefreshCw,
   FileBarChart,
-  ScrollText
+  ScrollText,
+  Laptop
 } from 'lucide-react';
 import { api } from '../services/mockData';
 
@@ -59,6 +60,7 @@ export default function Sidebar() {
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
     { to: '/employees', label: 'Employees', icon: Users },
     { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: true },
+    { to: '/sessions', label: 'Active Sessions', icon: Laptop },
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
     { to: '/reports', label: 'Reports', icon: FileBarChart },
     // Settings is a write surface — hidden from the read-only Auditor role.

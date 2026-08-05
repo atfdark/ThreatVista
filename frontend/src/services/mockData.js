@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://127.0.0.1:8000/api';
+// Backend API root. Set VITE_API_BASE_URL (e.g. http://192.168.1.100:8000/api)
+// in frontend/.env when the dashboard must talk to a SOC server on the LAN.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 // Authenticated axios instance: attaches the JWT from localStorage to every
 // request and redirects to /login when the token is rejected by the backend.
@@ -207,6 +209,63 @@ export const MOCK_SETTINGS = {
   monitor_processes: true
 };
 
+export const MOCK_ENDPOINTS = [
+  {
+    employee: { ...MOCK_EMPLOYEES[0] },
+    device: {
+      device_id: 'DEV-0001',
+      hostname: 'RAHUL-PC',
+      os_version: 'Windows 10',
+      cpu_cores: 8,
+      ram_gb: 16,
+      ip_address: '192.168.1.102',
+      agent_version: '1.0.0',
+      online: true,
+      last_seen_at: new Date(Date.now() - 3000).toISOString(),
+      last_cpu_usage: 15,
+      last_ram_usage: 42,
+      last_disk_usage: 63
+    },
+    recent_event_count: 12
+  },
+  {
+    employee: { ...MOCK_EMPLOYEES[2] },
+    device: {
+      device_id: 'DEV-0003',
+      hostname: 'PRIYA-PC',
+      os_version: 'Windows 11',
+      cpu_cores: 8,
+      ram_gb: 32,
+      ip_address: '192.168.1.105',
+      agent_version: '1.0.0',
+      online: true,
+      last_seen_at: new Date(Date.now() - 8000).toISOString(),
+      last_cpu_usage: 8,
+      last_ram_usage: 31,
+      last_disk_usage: 48
+    },
+    recent_event_count: 3
+  },
+  {
+    employee: { ...MOCK_EMPLOYEES[1] },
+    device: {
+      device_id: 'DEV-0002',
+      hostname: 'AMIT-PC',
+      os_version: 'Windows 10',
+      cpu_cores: 4,
+      ram_gb: 8,
+      ip_address: '192.168.1.104',
+      agent_version: '1.0.0',
+      online: false,
+      last_seen_at: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      last_cpu_usage: null,
+      last_ram_usage: null,
+      last_disk_usage: null
+    },
+    recent_event_count: 0
+  }
+];
+
 export const api = {
   isBackendConnected: async () => {
     try {
@@ -375,6 +434,16 @@ export const api = {
       return res.data;
     } catch {
       return [];
+    }
+  },
+
+  // --- EDR: connected endpoints (Active Sessions page) ---
+  getEndpoints: async () => {
+    try {
+      const res = await http.get(`/endpoints`);
+      return res.data;
+    } catch {
+      return MOCK_ENDPOINTS;
     }
   },
 

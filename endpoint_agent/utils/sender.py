@@ -3,7 +3,18 @@ import requests
 import json
 from datetime import datetime
 
-API_BASE_URL = "http://127.0.0.1:8000/api"
+def _resolve_api_base_url():
+    """Backend API base URL, from BACKEND_URL if set (LAN demo) else localhost.
+
+    Accepts either the full API root (http://host:8000/api) or just the server
+    root (http://host:8000), appending "/api" as needed.
+    """
+    url = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000/api").rstrip("/")
+    if not url.endswith("/api"):
+        url += "/api"
+    return url
+
+API_BASE_URL = _resolve_api_base_url()
 
 # Optional shared secret. If the backend is configured with THREATVISTA_AGENT_KEY,
 # events must carry the matching X-Agent-Key header.

@@ -117,9 +117,12 @@ python ai/train.py
 
 ### 4. Start the backend
 ```bash
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
-Backend runs at `http://127.0.0.1:8000` (docs at `/docs`).
+Backend runs at `http://127.0.0.1:8000` (docs at `/docs`). Binding `0.0.0.0`
+exposes it on every interface so endpoint agents on other machines can reach
+it. The bind host/port can also be set with `THREATVISTA_HOST` /
+`THREATVISTA_PORT` (see `.env.example`).
 
 ### 5. Start the frontend
 ```bash
@@ -127,12 +130,40 @@ cd frontend
 npm install
 npm run dev
 ```
-Dashboard runs at `http://localhost:5173`.
+Dashboard runs at `http://localhost:5173` (also on the LAN at
+`http://<your-ip>:5173` when Vite's `server.host` is enabled, which it is by
+default in `vite.config.js`).
 
 ### 6. (Optional) Run the endpoint agent on a Windows machine
 ```bash
 python endpoint_agent/agent.py
 ```
+
+### 7. LAN demo — one SOC server, many endpoints (hackathon)
+Turn your laptop into the Security Operations Center and teammates' laptops
+into monitored endpoints, all on the same Wi-Fi:
+
+1. **On the server laptop**, find its LAN IPv4: `ipconfig` (e.g. `192.168.1.100`).
+2. **Allow the API through Windows Firewall** (run as admin once):
+   ```powershell
+   netsh advfirewall firewall add rule name="ThreatVista API" dir=in action=allow protocol=TCP localport=8000
+   netsh advfirewall firewall add rule name="ThreatVista Dashboard" dir=in action=allow protocol=TCP localport=5173
+   ```
+3. **On every endpoint machine**, point the agent at the server before starting it:
+   ```bash
+   set BACKEND_URL=http://192.168.1.100:8000
+   python endpoint_agent/agent.py
+   ```
+   Each machine must use a different `AGENT_EMPLOYEE_EMAIL` (a seeded employee).
+4. **On the server**, point the frontend at the backend:
+   ```bash
+   cd frontend
+   echo VITE_API_BASE_URL=http://192.168.1.100:8000/api > .env
+   npm run dev
+   ```
+   Teammates open `http://192.168.1.100:5173` to watch live telemetry, then
+   create files, insert USB drives, and copy folders to a USB stick to trigger
+   events, correlation alerts, and the **Active Sessions** page.
 
 ---
 

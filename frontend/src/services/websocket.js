@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
-const WS_URL = 'ws://127.0.0.1:8000/ws';
+// Live feed URL, derived from the same backend base as the API client so it
+// follows VITE_API_BASE_URL (LAN demo) without a second setting.
+const _apiBase = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api').replace(/\/api$/, '');
+const WS_URL = _apiBase.replace(/^http/, 'ws') + '/ws';
 
 /**
  * Connects to the ThreatVista WebSocket once and stays connected for the

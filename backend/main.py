@@ -9,7 +9,7 @@ if ROOT_DIR not in sys.path:
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import router as api_router
-from backend.config import CORS_ORIGINS
+from backend.config import CORS_ORIGINS, LAN_MODE, HOST, PORT
 from backend.websocket.manager import manager
 
 app = FastAPI(
@@ -23,7 +23,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_credentials=True,
+    # In LAN mode origins is "*", which browsers only accept when credentials
+    # are disabled. The dashboard authenticates with a Bearer header (no
+    # cookies), so that is fine.
+    allow_credentials=not LAN_MODE,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -46,4 +49,4 @@ app.include_router(api_router, prefix="/api")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host=HOST, port=PORT, reload=True)

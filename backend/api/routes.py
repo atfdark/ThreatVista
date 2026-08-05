@@ -492,6 +492,53 @@ def get_employee_detail(
     return employee
 
 
+@router.get("/endpoints")
+def get_endpoints(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """List connected endpoints (registered devices) joined with their employee.
+
+    Powers the "Active Sessions" dashboard: every device, its live health from the
+    latest heartbeat, and how many telemetry events the employee produced in the
+    last hour. Sorted online-first so active machines lead the page.
+    """
+    devices = db.query(models.Device).all()
+    cutoff = datetime.utcnow() - timedelta(hours=1)
+
+    result = []
+    for dev in devices:
+        emp = dev.employee
+        recent_count = (
+            db.query(models.Event)
+            .filter(
+                models.Event.employee_id == emp.id,
+                models.Event.timestamp >= cutoff,
+            )
+            .count()
+        )
+        result.append({
+            "employee": {
+                "id": emp.id,
+                "name": emp.name,
+                "email": emp.email,
+                "department": emp.department,
+                "risk_score": emp.risk_score,
+                "status": emp.status,
+            },
+            "device": device_to_dict(dev),
+            "recent_event_count": recent_count,
+        })
+
+    result.sort(
+        key=lambda r: (
+            not (r["device"] or {}).get("online"),
+            r["employee"]["name"].lower(),
+        )
+    )
+    return result
+
+
 # Events
 @router.post("/events", response_model=EventResponse)
 async def create_event(
