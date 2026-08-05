@@ -1,18 +1,73 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import csv
+import io
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from backend.config import AGENT_API_KEY
 from backend.database.connection import get_db
 from backend.models import database as models
+from backend.models.database import AuditLog, Session as SessionModel
 from backend.services.event_service import EventService
 from backend.services.alert_engine import RuleBasedAlertEngine
 from backend.services.config_service import get_config, get_thresholds, to_dict, update_config
+from backend.services.audit_service import client_ip, log_action
+from backend.services.agent_service import (
+    register_device,
+    heartbeat as agent_heartbeat,
+    get_device,
+    device_to_dict,
+    compute_online_counts,
+)
+from backend.services.command_service import request_command, list_commands, ALLOWED_COMMANDS
+from backend.reports.report_service import generate_report, REPORT_TYPES
 from backend.websocket.manager import manager
-from backend.auth import create_access_token, get_current_user, hash_password, verify_password, require_roles
+from backend.auth import (
+    create_access_token,
+    create_session,
+    decode_token,
+    get_current_user,
+    hash_password,
+    revoke_session,
+    verify_password,
+    require_roles,
+)
 from ai.pipeline import AIPipeline
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Login brute-force throttling (in-memory). Resets on process restart.
+# ---------------------------------------------------------------------------
+_LOGIN_ATTEMPTS = {}          # username -> {"fails": int, "locked_until": datetime}
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCKOUT_MINUTES = 15
+
+def _check_lockout(username: str):
+    entry = _LOGIN_ATTEMPTS.get(username)
+    if entry and entry.get("locked_until"):
+        if entry["locked_until"] > datetime.utcnow():
+            remaining = int((entry["locked_until"] - datetime.utcnow()).total_seconds() // 60) + 1
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many failed attempts. Try again in ~{remaining} minutes.",
+            )
+    return None
+
+def _record_failed_login(username: str) -> bool:
+    """Count a failed attempt. Returns True when it triggers the lockout."""
+    entry = _LOGIN_ATTEMPTS.setdefault(username, {"fails": 0, "locked_until": None})
+    entry["fails"] += 1
+    if entry["fails"] >= LOGIN_MAX_FAILS:
+        entry["locked_until"] = datetime.utcnow() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+        entry["fails"] = 0
+        return True
+    return False
+
+def _clear_lockout(username: str):
+    _LOGIN_ATTEMPTS.pop(username, None)
 
 ai_pipeline = AIPipeline()
 
@@ -78,6 +133,8 @@ class EmployeeBase(BaseModel):
     photo_url: Optional[str]
     risk_score: int
     status: str
+    online: bool = False
+    hostname: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -121,6 +178,10 @@ class EmployeeDetailResponse(BaseModel):
     alerts: List[AlertSchema]
     risk_scores: List[RiskHistorySchema]
     ai_analysis: Optional[AIAnalysisResponse] = None
+    device: Optional[dict] = None
+    online: bool = False
+    endpoint_health: Optional[dict] = None
+    commands: List[dict] = []
 
     class Config:
         from_attributes = True
@@ -145,7 +206,11 @@ class AIAnalysisResponse(BaseModel):
     deviation: dict
     model_anomaly: bool
     model_score: float
+    confidence: float = 0
     timestamp: str
+
+class AlertStatusUpdate(BaseModel):
+    status: str  # Active | Investigating | Resolved
 
 class DashboardResponse(BaseModel):
     total_employees: int
@@ -154,18 +219,63 @@ class DashboardResponse(BaseModel):
     average_risk: float
     risk_distribution: List[dict]
     severity_distribution: List[dict]
+    online_employees: int = 0
+    offline_employees: int = 0
+
+# --- Agent & device schemas ------------------------------------------------
+class AgentRegisterRequest(BaseModel):
+    employee_email: str
+    device_id: Optional[str] = None
+    hostname: Optional[str] = None
+    os_version: Optional[str] = None
+    os_build: Optional[str] = None
+    cpu_model: Optional[str] = None
+    cpu_cores: Optional[int] = None
+    ram_gb: Optional[float] = None
+    disk_total_gb: Optional[float] = None
+    disk_free_gb: Optional[float] = None
+    ip_address: Optional[str] = None
+    agent_version: Optional[str] = None
+
+class AgentHeartbeatRequest(BaseModel):
+    device_id: str
+    cpu_usage: Optional[float] = None
+    ram_usage: Optional[float] = None
+    disk_usage: Optional[float] = None
+    ip_address: Optional[str] = None
+
+class CommandRequest(BaseModel):
+    command: str  # one of ALLOWED_COMMANDS
 
 
 # Auth Login Endpoint
 @router.post("/auth/login", response_model=TokenResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == request.username).first()
-    if not user or not verify_password(request.password, user.password_hash):
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+):
+    ip = client_ip(request)
+    _check_lockout(payload.username)
+
+    user = db.query(models.User).filter(models.User.username == payload.username).first()
+    if not user or not verify_password(payload.password, user.password_hash):
+        locked = _record_failed_login(payload.username)
+        log_action(db, None, "login.failed", "auth", details=f"Failed login for '{payload.username}'", ip=ip)
+        if locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Too many failed attempts. Account locked for {LOGIN_LOCKOUT_MINUTES} minutes.",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
-    token = create_access_token(user)
+
+    _clear_lockout(payload.username)
+    token, jti, expires_at = create_access_token(user)
+    create_session(db, user, jti, expires_at, ip=ip)
+    log_action(db, user, "login", "auth", resource_id=str(user.id), details="User login", ip=ip)
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -174,8 +284,82 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
     }
 
 @router.post("/auth/logout")
-def logout(current_user: models.User = Depends(get_current_user)):
+def logout(
+    request: Request,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Revoke the current session server-side so the token stops working."""
+    token = request.headers.get("authorization", "").replace("Bearer ", "")
+    try:
+        payload = decode_token(token)
+        revoke_session(db, payload.get("jti"))
+    except Exception:
+        pass
+    log_action(
+        db, current_user, "logout", "auth",
+        resource_id=str(current_user.id), details="User logout", ip=client_ip(request),
+    )
     return {"message": f"{current_user.username} logged out successfully"}
+
+
+# --- Session management -----------------------------------------------------
+@router.get("/auth/sessions")
+def list_sessions(
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """List active/revoked sessions. Admins may filter by any user_id."""
+    target_id = user_id or current_user.id
+    if target_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    sessions = (
+        db.query(SessionModel)
+        .filter(SessionModel.user_id == target_id)
+        .order_by(SessionModel.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": s.id,
+            "user_id": s.user_id,
+            "jti": s.jti,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+            "revoked": s.revoked,
+            "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
+            "ip_address": s.ip_address,
+        }
+        for s in sessions
+    ]
+
+
+@router.delete("/auth/sessions/{session_id}")
+def delete_session(
+    session_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Revoke a session. Users may revoke their own; admins/analysts any."""
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != current_user.id and current_user.role not in ("admin", "analyst"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    owner = db.query(models.User).filter(models.User.id == session.user_id).first()
+    if not session.revoked:
+        session.revoked = True
+        db.commit()
+        log_action(
+            db, current_user, "session.revoke", "session",
+            resource_id=str(session.id),
+            details=f"Revoked session for '{owner.username if owner else session.user_id}'",
+            ip=client_ip(request),
+        )
+    return {"message": f"Session {session_id} revoked"}
 
 @router.get("/auth/me")
 def get_me(current_user: models.User = Depends(get_current_user)):
@@ -234,13 +418,17 @@ def get_dashboard(
     high_risk = sum(1 for s in risk_scores if s > 75)
     avg_risk = int(sum(risk_scores) / len(risk_scores)) if risk_scores else 0
 
+    online_counts = compute_online_counts(db)
+
     return {
         "total_employees": len(employees),
         "active_alerts": active_alerts,
         "high_risk": high_risk,
         "average_risk": avg_risk,
         "risk_distribution": [{"range": k, "count": v} for k, v in risk_dist.items()],
-        "severity_distribution": [{"severity": k, "count": v} for k, v in severity_counts.items()]
+        "severity_distribution": [{"severity": k, "count": v} for k, v in severity_counts.items()],
+        "online_employees": online_counts["online"],
+        "offline_employees": online_counts["offline"],
     }
 
 
@@ -251,6 +439,10 @@ def get_employees(
     current_user: models.User = Depends(get_current_user),
 ):
     employees = db.query(models.Employee).all()
+    for emp in employees:
+        device = get_device(db, emp.id)
+        emp.online = bool(device and device_to_dict(device).get("online"))
+        emp.hostname = device.hostname if device else None
     return employees
 
 @router.get("/employees/{employee_id}", response_model=EmployeeDetailResponse)
@@ -277,15 +469,42 @@ def get_employee_detail(
         deviation=explanation.get("deviation", {}),
         model_anomaly=explanation.get("model_anomaly", False),
         model_score=explanation.get("model_score", 0),
+        confidence=explanation.get("confidence", 0),
         timestamp=result["timestamp"]
     )
+
+    # EDR device + online status + endpoint health + command history
+    device = get_device(db, employee_id)
+    employee.device = device_to_dict(device)
+    employee.online = bool(device and device_to_dict(device).get("online"))
+    if device:
+        employee.endpoint_health = {
+            "cpu_usage": device.last_cpu_usage,
+            "ram_usage": device.last_ram_usage,
+            "disk_usage": device.last_disk_usage,
+            "last_seen_at": device.last_seen_at.isoformat() if device.last_seen_at else None,
+            "agent_version": device.agent_version,
+        }
+    else:
+        employee.endpoint_health = None
+    employee.commands = list_commands(db, employee_id, limit=10)
 
     return employee
 
 
 # Events
 @router.post("/events", response_model=EventResponse)
-async def create_event(event: EventCreate, db: Session = Depends(get_db)):
+async def create_event(
+    event: EventCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    # When an agent key is configured, telemetry must authenticate with it.
+    if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid agent key",
+        )
     event_data = event.model_dump()
     created_event = EventService.create_event(db, event_data)
 
@@ -353,12 +572,93 @@ def get_alerts(
     return alerts
 
 
+@router.patch("/alerts/{alert_id}", response_model=AlertDetailResponse)
+async def update_alert_status(
+    alert_id: int,
+    payload: AlertStatusUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Persist alert lifecycle transitions (Active -> Investigating -> Resolved)."""
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    valid_statuses = ("Active", "Investigating", "Resolved")
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"status must be one of {valid_statuses}")
+
+    old_status = alert.status
+    alert.status = payload.status
+    db.commit()
+    db.refresh(alert)
+
+    log_action(
+        db, current_user, "alert.update", "alert",
+        resource_id=str(alert.id),
+        details=f"Alert status '{old_status}' -> '{alert.status}'",
+        ip=client_ip(request),
+    )
+
+    await _broadcast_alert_update(alert)
+    return alert
+
+
+async def _broadcast_alert_update(alert):
+    """Push an alert status change to connected dashboards."""
+    await manager.broadcast({
+        "type": "alert_updated",
+        "data": {
+            "id": alert.id,
+            "severity": alert.severity,
+            "reason": alert.reason,
+            "status": alert.status,
+            "timestamp": alert.timestamp.isoformat() if alert.timestamp else None,
+        },
+    })
+
+
+# Audit logs
+@router.get("/audit-logs")
+def get_audit_logs(
+    action: Optional[str] = None,
+    user_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    query = db.query(AuditLog)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if user_id:
+        query = query.filter(AuditLog.user_id == user_id)
+    logs = query.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit).all()
+    return [
+        {
+            "id": log.id,
+            "user_id": log.user_id,
+            "username": log.username,
+            "role": log.role,
+            "action": log.action,
+            "resource": log.resource,
+            "resource_id": log.resource_id,
+            "details": log.details,
+            "ip_address": log.ip_address,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in logs
+    ]
+
+
 # AI Analysis
 @router.post("/ai/analyze/{employee_id}", response_model=AIAnalysisResponse)
 def analyze_employee(
     employee_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
 ):
     employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if not employee:
@@ -371,6 +671,13 @@ def analyze_employee(
     employee.status = explanation["status"]
     db.commit()
 
+    log_action(
+        db, current_user, "ai.analyze", "employee",
+        resource_id=str(employee_id),
+        details=f"Risk score {employee.risk_score} ({employee.status})",
+        ip=client_ip(request),
+    )
+
     return AIAnalysisResponse(
         employee_id=employee_id,
         risk_score=explanation["risk_score"],
@@ -380,6 +687,7 @@ def analyze_employee(
         deviation=explanation.get("deviation", {}),
         model_anomaly=explanation.get("model_anomaly", False),
         model_score=explanation.get("model_score", 0),
+        confidence=explanation.get("confidence", 0),
         timestamp=result["timestamp"]
     )
 
@@ -405,6 +713,7 @@ def get_ai_analysis(
         deviation=explanation.get("deviation", {}),
         model_anomaly=explanation.get("model_anomaly", False),
         model_score=explanation.get("model_score", 0),
+        confidence=explanation.get("confidence", 0),
         timestamp=result["timestamp"]
     )
 
@@ -420,8 +729,223 @@ def get_settings(
 @router.put("/settings")
 def put_settings(
     payload: dict,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles("admin", "analyst")),
 ):
     updated = update_config(db, payload)
+    log_action(
+        db, current_user, "settings.update", "settings",
+        details=str({k: payload[k] for k in payload if k in ("high_risk_threshold", "suspicious_threshold", "dna_window_days")}),
+        ip=client_ip(request),
+    )
     return to_dict(updated)
+
+
+# ---------------------------------------------------------------------------
+# Reports (downloadable exports)
+# ---------------------------------------------------------------------------
+@router.get("/reports/{report_type}")
+def get_report(
+    report_type: str,
+    format: str = Query("json", pattern="^(json|csv|html)$"),
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    request: Request = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Generate and download a report (daily_threat, weekly_activity, ...)."""
+    if report_type not in REPORT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown report type. Valid: {', '.join(REPORT_TYPES)}",
+        )
+    try:
+        report = generate_report(db, report_type, start=start, end=end)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    log_action(
+        db, current_user, "report.download", "report",
+        resource_id=report_type, details=f"format={format}",
+        ip=client_ip(request),
+    )
+
+    if format == "json":
+        return report
+
+    if format == "csv":
+        return _render_report_csv(report, report_type)
+
+    return _render_report_html(report)
+
+
+def _render_report_csv(report: dict, report_type: str) -> StreamingResponse:
+    """Serialize a report's rows into a CSV attachment."""
+    rows = report.get("rows", [])
+    fieldnames = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    if not fieldnames:
+        fieldnames = ["item"]
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    buffer.seek(0)
+
+    filename = f"threatvista_{report_type}_{datetime.utcnow().strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _render_report_html(report: dict) -> HTMLResponse:
+    """Render a self-contained printable HTML report (browsers can save to PDF)."""
+    summary = report.get("summary", {})
+    rows = report.get("rows", [])
+    trends = report.get("trends", [])
+    recommendations = report.get("recommendations", [])
+
+    summary_html = "".join(
+        f'<div class="stat"><span class="label">{k.replace("_", " ")}</span>'
+        f'<span class="value">{v}</span></div>'
+        for k, v in summary.items()
+    )
+    rows_html = ""
+    if rows:
+        columns = list(rows[0].keys())
+        header = "".join(f"<th>{c.replace('_', ' ')}</th>" for c in columns)
+        body = "".join(
+            "<tr>" + "".join(f"<td>{row.get(c, '')}</td>" for c in columns) + "</tr>"
+            for row in rows
+        )
+        rows_html = f"<table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>"
+    else:
+        rows_html = "<p class='empty'>No rows for this period.</p>"
+
+    trends_html = "".join(
+        f"<tr><td>{t.get('date', '')}</td><td>{t.get('event_count', 0)}</td>"
+        f"<td>{t.get('avg_risk', 0)}</td><td>{t.get('new_alerts', 0)}</td></tr>"
+        for t in trends
+    )
+    recs_html = "".join(f"<li>{r}</li>" for r in recommendations) or "<li>None</li>"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>{report.get('title', 'ThreatVista Report')}</title>
+<style>
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #0f172a; }}
+  h1 {{ font-size: 22px; margin: 0 0 4px; }}
+  .meta {{ color: #64748b; font-size: 12px; margin-bottom: 24px; }}
+  .stats {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }}
+  .stat {{ border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 16px; min-width: 120px; }}
+  .stat .label {{ display: block; color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }}
+  .stat .value {{ font-size: 20px; font-weight: 700; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 24px; }}
+  th, td {{ border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }}
+  th {{ background: #f8fafc; text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }}
+  h2 {{ font-size: 15px; margin: 20px 0 8px; }}
+  .empty {{ color: #94a3b8; font-style: italic; }}
+  ul {{ font-size: 12px; line-height: 1.7; }}
+</style>
+</head>
+<body>
+  <h1>{report.get('title', 'ThreatVista Report')}</h1>
+  <div class="meta">Period: {report.get('period', '')} &middot; Generated: {report.get('generated_at', '')}</div>
+  <div class="stats">{summary_html}</div>
+  <h2>Detail</h2>
+  {rows_html}
+  <h2>Daily Risk Trend</h2>
+  <table><thead><tr><th>Date</th><th>Events</th><th>Avg Risk</th><th>New Alerts</th></tr></thead>
+  <tbody>{trends_html or "<tr><td colspan='4'>No data.</td></tr>"}</tbody></table>
+  <h2>Recommendations</h2>
+  <ul>{recs_html}</ul>
+</body>
+</html>"""
+    return HTMLResponse(content=html, media_type="text/html")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint agent (device registration + heartbeat) & remote commands
+# ---------------------------------------------------------------------------
+@router.post("/agent/register")
+def agent_register(
+    payload: AgentRegisterRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Register an endpoint agent's device for an employee.
+
+    Called once at agent startup. Resolves the employee by email, creates or
+    updates their Device profile, and returns the identity used for heartbeats.
+    """
+    if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid agent key")
+    try:
+        result = register_device(db, payload.employee_email, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"registered": True, **result}
+
+
+@router.post("/agent/heartbeat")
+def agent_heartbeat_endpoint(
+    payload: AgentHeartbeatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Heartbeat from an endpoint agent. Refreshes online status + health."""
+    if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid agent key")
+    updated = agent_heartbeat(db, payload.device_id, payload.model_dump())
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Unknown device_id '{payload.device_id}'")
+    return {"heartbeat": "ok", "device": updated}
+
+
+@router.post("/employees/{employee_id}/commands")
+def create_command(
+    employee_id: int,
+    payload: CommandRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Issue a (simulated) remote command to an endpoint agent."""
+    if payload.command not in ALLOWED_COMMANDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown command '{payload.command}'. Valid: {', '.join(ALLOWED_COMMANDS)}",
+        )
+    try:
+        cmd = request_command(db, employee_id, payload.command, requested_by=current_user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    log_action(
+        db, current_user, "command.issue", "employee",
+        resource_id=str(employee_id),
+        details=f"Command '{payload.command}' (simulated)",
+        ip=client_ip(request),
+    )
+    return cmd
+
+
+@router.get("/employees/{employee_id}/commands")
+def get_commands(
+    employee_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """List recent commands issued to an employee's endpoint."""
+    return list_commands(db, employee_id, limit=20)

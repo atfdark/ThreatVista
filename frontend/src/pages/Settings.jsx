@@ -18,6 +18,12 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  // Read-Only Auditor role: settings are view-only, all controls disabled.
+  const isAuditor = (() => {
+    try { return JSON.parse(localStorage.getItem('threatvista_user') || '{}').role === 'auditor'; }
+    catch { return false; }
+  })();
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -92,6 +98,7 @@ export default function Settings() {
       </div>
 
       <form onSubmit={handleSave} className="space-y-6 max-w-3xl">
+        <fieldset disabled={isAuditor} className="space-y-6">
         {/* Risk Threshold Panel */}
         <div className="p-6 glass-panel border border-cyber-border/80 space-y-6">
           <div className="flex items-center gap-3 border-b border-cyber-border/50 pb-4">
@@ -215,13 +222,13 @@ export default function Settings() {
         <div className="flex items-center gap-4">
           <button
             type="submit"
-            disabled={saving}
-            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-xs tracking-wider transition-all focus:outline-none hover:scale-[1.01] disabled:opacity-50"
+            disabled={saving || isAuditor}
+            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-xs tracking-wider transition-all focus:outline-none hover:scale-[1.01] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save className="h-4 w-4" /> {saving ? 'SAVING...' : 'SAVE ENGINE CONFIGURATION'}
+            <Save className="h-4 w-4" /> {isAuditor ? 'READ-ONLY MODE' : saving ? 'SAVING...' : 'SAVE ENGINE CONFIGURATION'}
           </button>
 
-          {saved && (
+          {saved && !isAuditor && (
             <div className="flex items-center gap-1.5 text-cyber-success font-mono text-xs uppercase animate-pulse">
               <CheckCircle2 className="h-4 w-4" /> Configuration saved to database
             </div>
@@ -232,7 +239,14 @@ export default function Settings() {
               <AlertCircle className="h-4 w-4" /> {saveError}
             </div>
           )}
+
+          {isAuditor && (
+            <div className="flex items-center gap-1.5 text-cyber-warning font-mono text-xs uppercase">
+              <ShieldAlert className="h-4 w-4" /> Read-only auditor — changes are blocked
+            </div>
+          )}
         </div>
+        </fieldset>
       </form>
     </div>
   );

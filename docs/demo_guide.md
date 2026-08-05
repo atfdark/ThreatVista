@@ -72,6 +72,20 @@ Watch the dashboard update live as events stream in:
 - Go to **Settings**, drag the "High Risk Classification Threshold", save.
 - Re-run an analysis — classification responds to the persisted config.
 
+### 6. Show the enterprise EDR layer (60 sec)
+The dashboard isn't just a website — real **agents** run on each machine. Show:
+
+- **Online Endpoints** stat card on the dashboard (`3/3 online`).
+- Open **Rahul's profile** → his machine is **ONLINE** (green pulse, "last heartbeat Xs ago").
+- **Endpoint Device Profile**: hostname `RHLAPTOP01`, Windows 11, Intel i7, 32 GB RAM, IP.
+- **Endpoint Health**: live CPU / RAM / disk usage bars from the agent's heartbeat.
+- **Behavior Timeline**: login at 12:30 AM → USB insert → 150+ file copies → upload, with the risk reasons attached.
+- **Activity Explorer**: tab through USB history / processes / files.
+- **AI Confidence**: 99% on Rahul's Critical assessment.
+- **Remote Commands**: click *Disable USB* → confirmation "dispatched (simulated)" + command history row.
+
+To show online→offline live: stop the agent (or wait 90s without a heartbeat) and the badge flips to **OFFLINE**.
+
 ---
 
 ## 💡 Judge Q&A Prep

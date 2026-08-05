@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from backend.database.connection import engine, Base, SessionLocal
-from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile, SystemConfig
+from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile, SystemConfig, Device
 from backend.auth import hash_password, verify_password
 
 def ensure_admin_hash(db):
@@ -28,6 +28,13 @@ def ensure_analyst(db):
         db.commit()
         print("[+] Seeded 'analyst' demo account.")
 
+def ensure_auditor(db):
+    """Ensure the read-only 'auditor' demo account exists (RBAC)."""
+    if db.query(User).filter(User.username == "auditor").first() is None:
+        db.add(User(username="auditor", password_hash=hash_password("auditor123"), role="auditor"))
+        db.commit()
+        print("[+] Seeded 'auditor' demo account.")
+
 def ensure_system_config(db):
     """Ensure a SystemConfig row exists (created with defaults)."""
     if db.query(SystemConfig).first() is None:
@@ -46,6 +53,7 @@ def init_db():
         ensure_system_config(db)
         ensure_admin_hash(db)
         ensure_analyst(db)
+        ensure_auditor(db)
 
         # Check if core dataset is already seeded (employees, not just users —
         # the demo role accounts above are always ensured).
@@ -115,6 +123,62 @@ def init_db():
             avg_upload_mb_per_day=5.0
         )
         db.add_all([rahul_dna, amit_dna, priya_dna])
+
+        # 3b. Endpoint Devices (seeded so the dashboard shows online endpoints)
+        now_dt = datetime.utcnow()
+        db.add_all([
+            Device(
+                employee_id=rahul.id,
+                device_id="DEV-RHL-0001",
+                hostname="RHLAPTOP01",
+                os_version="Windows 11 Pro",
+                os_build="26100",
+                cpu_model="Intel Core i7-12700H",
+                cpu_cores=14,
+                ram_gb=32.0,
+                disk_total_gb=512.0,
+                disk_free_gb=187.4,
+                ip_address="192.168.1.42",
+                agent_version="1.0.0",
+                status="online",
+                last_seen_at=now_dt,
+                first_seen_at=now_dt,
+            ),
+            Device(
+                employee_id=amit.id,
+                device_id="DEV-AMT-0002",
+                hostname="AMT-PC02",
+                os_version="Windows 11 Home",
+                os_build="22631",
+                cpu_model="AMD Ryzen 5 5600X",
+                cpu_cores=6,
+                ram_gb=16.0,
+                disk_total_gb=256.0,
+                disk_free_gb=62.8,
+                ip_address="192.168.1.57",
+                agent_version="1.0.0",
+                status="online",
+                last_seen_at=now_dt,
+                first_seen_at=now_dt,
+            ),
+            Device(
+                employee_id=priya.id,
+                device_id="DEV-PRI-0003",
+                hostname="PRIYA-HP3",
+                os_version="Windows 11 Home",
+                os_build="22631",
+                cpu_model="Intel Core i5-1240P",
+                cpu_cores=12,
+                ram_gb=16.0,
+                disk_total_gb=512.0,
+                disk_free_gb=304.2,
+                ip_address="192.168.1.63",
+                agent_version="1.0.0",
+                status="online",
+                last_seen_at=now_dt,
+                first_seen_at=now_dt,
+            ),
+        ])
 
         # 4. Risk Score History
         # Rahul's upward risk trend

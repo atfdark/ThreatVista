@@ -13,15 +13,15 @@ export default function MainLayout() {
   }, [navigate]);
 
   return (
-    <div className="flex h-screen bg-cyber-bg text-cyber-text cyber-grid min-h-screen">
+    <div className="flex h-screen bg-cyber-bg text-cyber-text cyber-grid">
       {/* Navigation Sidebar */}
       <Sidebar />
 
-      {/* Main Command Center Body */}
-      <main className="flex-1 pl-64 overflow-y-auto flex flex-col min-h-screen relative scanline-overlay">
+      {/* Main Command Center Body — this element is the scroll container */}
+      <main className="flex-1 pl-64 overflow-y-auto relative scanline-overlay">
         {/* Subtle top banner decoration */}
-        <div className="h-1 bg-gradient-to-r from-cyber-primary via-cyber-secondary to-cyber-accent"></div>
-        <div className="p-8 flex-1">
+        <div className="h-1 bg-gradient-to-r from-cyber-primary via-cyber-secondary to-cyber-accent sticky top-0 z-10"></div>
+        <div className="p-8">
           <Outlet />
         </div>
       </main>

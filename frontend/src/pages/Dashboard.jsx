@@ -91,9 +91,12 @@ export default function Dashboard() {
   const highRisk = stats?.high_risk || 2;
   const activeAlerts = stats?.active_alerts || 6;
   const averageRisk = stats?.average_risk || 18;
+  const onlineEmployees = stats?.online_employees ?? 0;
+  const offlineEmployees = stats?.offline_employees ?? 0;
 
   const statCards = [
     { label: 'Total Employees', value: totalEmployees, sub: 'Active Monitoring', icon: Users, color: 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' },
+    { label: 'Online Endpoints', value: `${onlineEmployees}/${totalEmployees}`, sub: `${offlineEmployees} offline`, icon: Radio, color: 'text-cyber-success border-cyber-success/20 bg-cyber-success/5' },
     { label: 'High Risk Users', value: highRisk, sub: 'Immediate Action Required', icon: ShieldAlert, color: 'text-cyber-danger border-cyber-danger/30 bg-cyber-danger/5 animate-pulse' },
     { label: 'Active Threat Alerts', value: activeAlerts, sub: 'Requires Review', icon: AlertTriangle, color: 'text-cyber-warning border-cyber-warning/20 bg-cyber-warning/5' },
     { label: 'Average Risk Score', value: `${averageRisk}%`, sub: 'Healthy Baseline', icon: TrendingUp, color: 'text-cyber-success border-cyber-success/20 bg-cyber-success/5' },
@@ -112,7 +115,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
         {statCards.map((card, i) => {
           const Icon = card.icon;
           return (
@@ -232,7 +235,10 @@ export default function Dashboard() {
                         {emp.name.split(' ').map(n => n[0]).join('')}
                       </div>
                       <div>
-                        <span className="font-semibold text-cyber-text block">{emp.name}</span>
+                        <span className="font-semibold text-cyber-text block flex items-center gap-1.5">
+                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${emp.online ? 'bg-cyber-success' : 'bg-cyber-danger'}`}></span>
+                          {emp.name}
+                        </span>
                         <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
                       </div>
                     </td>

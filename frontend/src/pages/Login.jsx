@@ -108,6 +108,7 @@ export default function Login() {
             <span className="text-cyber-text font-semibold">Demo Credentials:</span>
             <div className="mt-1">Administrator: <span className="text-cyber-primary">admin / admin123</span></div>
             <div>Security Analyst: <span className="text-cyber-primary">analyst / analyst123</span></div>
+            <div>Read-Only Auditor: <span className="text-cyber-primary">auditor / auditor123</span></div>
           </div>
         </div>
       </div>

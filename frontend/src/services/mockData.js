@@ -328,6 +328,67 @@ export const api = {
     return res.data;
   },
 
+  // --- Auth / sessions (backend-revoked logout) ---
+  logout: async () => {
+    try {
+      await http.post(`/auth/logout`);
+    } catch {
+      /* best-effort: still clear local state even if the backend is down */
+    }
+  },
+
+  getSessions: async (userId) => {
+    const params = userId ? { user_id: userId } : {};
+    const res = await http.get(`/auth/sessions`, { params });
+    return res.data;
+  },
+
+  revokeSession: async (sessionId) => {
+    const res = await http.delete(`/auth/sessions/${sessionId}`);
+    return res.data;
+  },
+
+  // --- Audit trail (admin only) ---
+  getAuditLogs: async (params = {}) => {
+    const res = await http.get(`/audit-logs`, { params });
+    return res.data;
+  },
+
+  // --- Report downloads (blob; supports csv | json | html) ---
+  downloadReport: async (reportType, format = 'json', start = '', end = '') => {
+    const params = { format };
+    if (start) params.start = start;
+    if (end) params.end = end;
+    const res = await http.get(`/reports/${reportType}`, { params, responseType: 'blob' });
+    return res.data;
+  },
+
+  // --- EDR: remote commands (simulated) ---
+  requestCommand: async (employeeId, command) => {
+    const res = await http.post(`/employees/${employeeId}/commands`, { command });
+    return res.data;
+  },
+
+  getCommands: async (employeeId) => {
+    try {
+      const res = await http.get(`/employees/${employeeId}/commands`);
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  // --- EDR: agent registration + heartbeat (used by the endpoint agent) ---
+  registerAgent: async (employeeEmail, deviceInfo) => {
+    const res = await http.post(`/agent/register`, { employee_email: employeeEmail, ...deviceInfo });
+    return res.data;
+  },
+
+  sendHeartbeat: async (deviceId, metrics) => {
+    const res = await http.post(`/agent/heartbeat`, { device_id: deviceId, ...metrics });
+    return res.data;
+  },
+
   login: async (username, password) => {
     try {
       const res = await http.post(`/auth/login`, { username, password });
@@ -336,16 +397,25 @@ export const api = {
       if (err.response && err.response.status === 401) {
         throw new Error("Invalid username or password");
       }
+      if (err.response && err.response.status === 429) {
+        throw new Error(err.response.data?.detail || "Too many attempts. Try again later.");
+      }
       // Offline fallback so the demo can still be shown without a backend.
-      if (username === "admin" && password === "admin123") {
+      const OFFLINE_USERS = {
+        admin: { password: "admin123", role: "admin" },
+        analyst: { password: "analyst123", role: "analyst" },
+        auditor: { password: "auditor123", role: "auditor" },
+      };
+      const match = OFFLINE_USERS[username];
+      if (match && match.password === password) {
         return {
-          access_token: "mock_jwt_token_threatvista_admin",
+          access_token: `mock_jwt_token_threatvista_${username}`,
           token_type: "bearer",
           username: username,
-          role: "admin"
+          role: match.role
         };
       }
-      throw new Error("Connection failed. Use admin / admin123");
+      throw new Error("Connection failed. Use admin / admin123 (or analyst / auditor accounts).");
     }
   }
 };

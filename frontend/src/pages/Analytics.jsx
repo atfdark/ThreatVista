@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, CartesianGrid, Legend } from 'recharts';
-import { BarChart3, ShieldAlert, Cpu, HardDrive, Network, BrainCircuit } from 'lucide-react';
+import { BarChart3, ShieldAlert, Cpu, HardDrive, Network, BrainCircuit, Activity } from 'lucide-react';
 import { api } from '../services/mockData';
 
 export default function Analytics() {

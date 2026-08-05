@@ -1,5 +1,54 @@
+import platform
+import socket
 import psutil
 from datetime import datetime
+
+AGENT_VERSION = "1.0.0"
+
+_GB = 1024 ** 3
+
+
+def get_device_info():
+    """Collect static device profile sent at agent registration."""
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = None
+
+    # Best-effort local IPv4 address (first non-loopback interface).
+    ip_address = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip_address = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+
+    os_ver = f"{platform.system()} {platform.release()}"
+    os_build = platform.version()
+    cpu_model = platform.processor() or platform.machine()
+    try:
+        cpu_cores = psutil.cpu_count(logical=True)
+        ram_gb = round(psutil.virtual_memory().total / _GB, 1)
+        disk_total_gb = round(psutil.disk_usage('/').total / _GB, 1)
+        disk_free_gb = round(psutil.disk_usage('/').free / _GB, 1)
+    except Exception:
+        cpu_cores = ram_gb = disk_total_gb = disk_free_gb = None
+
+    return {
+        "hostname": hostname,
+        "os_version": os_ver,
+        "os_build": os_build,
+        "cpu_model": cpu_model,
+        "cpu_cores": cpu_cores,
+        "ram_gb": ram_gb,
+        "disk_total_gb": disk_total_gb,
+        "disk_free_gb": disk_free_gb,
+        "ip_address": ip_address,
+        "agent_version": AGENT_VERSION,
+    }
+
 
 def get_system_metrics():
     cpu_usage = psutil.cpu_percent(interval=1)

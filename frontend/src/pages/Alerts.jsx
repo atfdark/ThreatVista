@@ -4,11 +4,10 @@ import {
   AlertTriangle, 
   Filter, 
   Search, 
-  ShieldAlert, 
-  CheckCircle2, 
-  Clock, 
+  ShieldAlert,
+  CheckCircle2,
+  Clock,
   ChevronRight,
-  Database,
   RefreshCw
 } from 'lucide-react';
 import { api } from '../services/mockData';
@@ -20,6 +19,14 @@ export default function Alerts() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [actionError, setActionError] = useState('');
+
+  // Role gates the INVESTIGATE / RESOLVE actions (read-only auditor can't mutate).
+  const role = (() => {
+    try { return JSON.parse(localStorage.getItem('threatvista_user') || '{}').role || 'admin'; }
+    catch { return 'admin'; }
+  })();
+  const canAct = role === 'admin' || role === 'analyst';
 
   const loadAlerts = async () => {
     setLoading(true);
@@ -37,12 +44,19 @@ export default function Alerts() {
     loadAlerts();
   }, []);
 
-  const handleUpdateStatus = (alertId, newStatus) => {
-    setAlerts(prevAlerts => 
-      prevAlerts.map(alert => 
-        alert.id === alertId ? { ...alert, status: newStatus } : alert
-      )
+  const handleUpdateStatus = async (alertId, newStatus) => {
+    setActionError('');
+    const previous = alerts.map(a => ({ ...a }));
+    setAlerts(prevAlerts =>
+      prevAlerts.map(alert => (alert.id === alertId ? { ...alert, status: newStatus } : alert))
     );
+    try {
+      await api.updateAlertStatus(alertId, newStatus);
+    } catch (err) {
+      // Revert optimistic update on failure.
+      setAlerts(previous);
+      setActionError(err?.response?.data?.detail || 'Failed to update alert status.');
+    }
   };
 
   const filteredAlerts = alerts.filter(alert => {
@@ -79,6 +93,19 @@ export default function Alerts() {
           <RefreshCw className="h-4 w-4" /> REFRESH LEDGER
         </button>
       </div>
+
+      {actionError && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-cyber-danger/10 border border-cyber-danger/30 rounded-lg text-xs text-cyber-danger font-mono">
+          <AlertTriangle className="h-4 w-4" />
+          {actionError}
+        </div>
+      )}
+      {!canAct && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-cyber-warning/10 border border-cyber-warning/30 rounded-lg text-xs text-cyber-warning font-mono">
+          <ShieldAlert className="h-4 w-4" />
+          READ-ONLY AUDITOR — alert mitigation actions are disabled.
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="flex flex-col xl:flex-row gap-4">
@@ -193,16 +220,16 @@ export default function Alerts() {
                   </td>
                   <td className="py-4 text-right pr-4 whitespace-nowrap">
                     <div className="flex justify-end gap-2">
-                      {alert.status === 'Active' && (
-                        <button 
+                      {canAct && alert.status === 'Active' && (
+                        <button
                           onClick={() => handleUpdateStatus(alert.id, 'Investigating')}
                           className="px-2 py-1 bg-cyber-warning/15 hover:bg-cyber-warning text-cyber-warning hover:text-cyber-bg rounded border border-cyber-warning/35 text-[10px] font-bold tracking-wider transition-all"
                         >
                           INVESTIGATE
                         </button>
                       )}
-                      {alert.status !== 'Resolved' && (
-                        <button 
+                      {canAct && alert.status !== 'Resolved' && (
+                        <button
                           onClick={() => handleUpdateStatus(alert.id, 'Resolved')}
                           className="px-2 py-1 bg-cyber-success/15 hover:bg-cyber-success text-cyber-success hover:text-cyber-bg rounded border border-cyber-success/35 text-[10px] font-bold tracking-wider transition-all"
                         >

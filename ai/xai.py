@@ -19,8 +19,25 @@ class ExplainableAI:
             "deviation": deviation,
             "recommendations": recommendations,
             "model_anomaly": anomalies.get("is_anomaly", False),
-            "model_score": anomalies.get("score", 0)
+            "model_score": anomalies.get("score", 0),
+            "confidence": self._confidence(risk, deviations=deviation, anomalies=anomalies),
         }
+
+    def _confidence(self, risk: Dict, deviations: Dict, anomalies: Dict) -> int:
+        """Estimate how confident the engine is in its assessment (0-100).
+
+        Rises with the strength of evidence: number of detected risk factors,
+        magnitude of behavior deviations from baseline, and whether the
+        Isolation Forest flagged an anomaly.
+        """
+        evidence = len(risk.get("reasons", [])) * 8
+        if anomalies.get("is_anomaly"):
+            evidence += 10
+        dev_sum = sum(
+            abs(v) for v in deviations.values() if isinstance(v, (int, float))
+        )
+        evidence += min(12, dev_sum / 100.0)
+        return round(min(99, max(50, 50 + evidence)))
 
     def _recommend(self, status, reasons, correlations):
         recs = []

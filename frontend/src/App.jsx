@@ -7,6 +7,8 @@ import EmployeeProfile from './pages/EmployeeProfile';
 import Alerts from './pages/Alerts';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
+import Reports from './pages/Reports';
+import Audit from './pages/Audit';
 
 function App() {
   return (
@@ -20,6 +22,8 @@ function App() {
           <Route path="alerts" element={<Alerts />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="audit" element={<Audit />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -11,6 +11,7 @@ Usage:
 
 Requires the backend to be running on http://127.0.0.1:8000/api
 """
+import os
 import sys
 import time
 import json
@@ -18,6 +19,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 API = "http://127.0.0.1:8000/api"
+
+# Optional: if the backend requires an agent key, send it on telemetry posts.
+AGENT_KEY = os.environ.get("THREATVISTA_AGENT_KEY", "")
 
 # Scenario targets: employee 1 = Rahul (Engineering), 2 = Amit (Sales),
 #                   3 = Priya (HR)
@@ -110,11 +114,10 @@ def _ts(marker):
 
 def post_event(token, payload):
     body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{API}/events",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
+    headers = {"Content-Type": "application/json"}
+    if AGENT_KEY:
+        headers["X-Agent-Key"] = AGENT_KEY
+    req = urllib.request.Request(f"{API}/events", data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())

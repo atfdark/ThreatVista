@@ -9,6 +9,7 @@ if ROOT_DIR not in sys.path:
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import router as api_router
+from backend.config import CORS_ORIGINS
 from backend.websocket.manager import manager
 
 app = FastAPI(
@@ -17,9 +18,11 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# CORS origins come from config (env THREATVISTA_CORS_ORIGINS), defaulting to
+# the local Vite dev server. Never '*' with credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -32,7 +32,35 @@ export default function EmployeeProfile() {
   // Detail Mode States
   const [employee, setEmployee] = useState(null);
   const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [commands, setCommands] = useState([]);
+  const [commandMsg, setCommandMsg] = useState('');
+  const [commandErr, setCommandErr] = useState('');
+  const [activityTab, setActivityTab] = useState('all');
   const [loading, setLoading] = useState(true);
+
+  // Simulated remote-command actions from the SOC console
+  const handleCommand = async (command, label) => {
+    if (!id) return;
+    setCommandMsg('');
+    setCommandErr('');
+    try {
+      const cmd = await api.requestCommand(parseInt(id), command);
+      setCommands(prev => [cmd, ...prev]);
+      setCommandMsg(`✓ "${label}" dispatched to endpoint agent (simulated).`);
+      setTimeout(() => setCommandMsg(''), 5000);
+    } catch (err) {
+      setCommandErr(err?.response?.data?.detail || `Failed to dispatch "${label}".`);
+    }
+  };
+
+  const RELATIVE_TIME = (iso) => {
+    if (!iso) return 'never';
+    const diff = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (diff < 5) return 'just now';
+    if (diff < 60) return `${Math.floor(diff)}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    return `${Math.floor(diff / 3600)}h ago`;
+  };
 
   // Load appropriate data
   useEffect(() => {
@@ -43,6 +71,7 @@ export default function EmployeeProfile() {
           const detail = await api.getEmployeeDetail(parseInt(id));
           setEmployee(detail);
           setAiAnalysis(detail.ai_analysis || null);
+          setCommands(detail.commands || []);
         } else {
           const list = await api.getEmployees();
           setEmployees(list);
@@ -149,6 +178,70 @@ export default function EmployeeProfile() {
           </div>
         </div>
 
+        {/* EDR: Endpoint Status / Device Info / Health */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Online status */}
+          <div className="p-5 glass-panel border border-cyber-border/80 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider">Endpoint Status</span>
+              <span className={`h-2.5 w-2.5 rounded-full ${employee.online ? 'bg-cyber-success shadow-[0_0_10px_#10b981] animate-pulse' : 'bg-cyber-danger shadow-[0_0_10px_#ef4444]'}`}></span>
+            </div>
+            <div className="mt-3">
+              <span className={`text-xl font-extrabold font-mono ${employee.online ? 'text-cyber-success' : 'text-cyber-danger'}`}>
+                {employee.online ? 'ONLINE' : 'OFFLINE'}
+              </span>
+              <p className="text-[10px] text-cyber-muted font-mono mt-1">
+                Last heartbeat {RELATIVE_TIME(employee.endpoint_health?.last_seen_at)}
+              </p>
+            </div>
+          </div>
+
+          {/* Device info */}
+          <div className="p-5 glass-panel border border-cyber-border/80 md:col-span-2">
+            <div className="flex items-center gap-2 border-b border-cyber-border/50 pb-3 mb-3">
+              <Laptop className="h-4 w-4 text-cyber-secondary" />
+              <h4 className="text-xs font-bold uppercase font-mono">Endpoint Device Profile</h4>
+            </div>
+            {employee.device ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-[11px]">
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">Hostname</span><span className="text-cyber-text font-semibold">{employee.device.hostname || '-'}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">OS</span><span className="text-cyber-text">{employee.device.os_version || '-'}{employee.device.os_build ? ` (${employee.device.os_build})` : ''}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">CPU</span><span className="text-cyber-text">{employee.device.cpu_model || '-'}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">IP Address</span><span className="text-cyber-text font-mono">{employee.device.ip_address || '-'}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">RAM</span><span className="text-cyber-text">{employee.device.ram_gb ? `${employee.device.ram_gb} GB` : '-'}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">Disk Free</span><span className="text-cyber-text">{employee.device.disk_free_gb ? `${employee.device.disk_free_gb} GB` : '-'}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">Device ID</span><span className="text-cyber-text font-mono">{employee.device.device_id}</span></div>
+                <div><span className="block text-[9px] text-cyber-muted uppercase font-mono">Agent</span><span className="text-cyber-text">v{employee.device.agent_version || '-'}</span></div>
+              </div>
+            ) : (
+              <div className="text-cyber-muted text-xs font-mono py-4">NO ENDPOINT AGENT REGISTERED FOR THIS EMPLOYEE</div>
+            )}
+          </div>
+        </div>
+
+        {/* Endpoint health strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+          {[
+            { label: 'CPU USAGE', value: employee.endpoint_health?.cpu_usage, color: 'text-cyber-secondary' },
+            { label: 'MEMORY USAGE', value: employee.endpoint_health?.ram_usage, color: 'text-cyber-accent' },
+            { label: 'DISK USAGE', value: employee.endpoint_health?.disk_usage, color: 'text-cyber-warning' },
+          ].map(metric => {
+            const val = metric.value;
+            const pct = typeof val === 'number' ? Math.min(100, Math.max(0, val)) : 0;
+            return (
+              <div key={metric.label} className="p-4 glass-panel border border-cyber-border/80">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-[9px] text-cyber-muted font-mono uppercase tracking-wider">{metric.label}</span>
+                  <span className={`text-xs font-bold font-mono ${metric.color}`}>{val !== null && val !== undefined ? `${Math.round(val)}%` : '--'}</span>
+                </div>
+                <div className="w-full bg-cyber-bg border border-cyber-border h-1.5 rounded-full overflow-hidden">
+                  <div className={`h-full ${metric.color} bg-current`} style={{ width: `${pct}%` }}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         {/* Behavior DNA Profiling (Baseline) */}
         <div>
           <h3 className="text-sm font-bold font-mono uppercase text-cyber-muted tracking-wider mb-4 flex items-center gap-2">
@@ -236,6 +329,16 @@ export default function EmployeeProfile() {
                         ISOLATION FOREST ANOMALY
                       </span>
                     )}
+                  </div>
+                  {/* AI confidence */}
+                  <div className="p-3 bg-cyber-bg/50 border border-cyber-border rounded-lg">
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className="text-[9px] text-cyber-muted font-mono uppercase tracking-wider">Model Confidence</span>
+                      <span className="text-xs font-bold text-cyber-primary font-mono">{aiAnalysis.confidence ?? 0}%</span>
+                    </div>
+                    <div className="w-full bg-cyber-bg border border-cyber-border h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-cyber-primary" style={{ width: `${aiAnalysis.confidence ?? 0}%` }}></div>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider">Detected Risk Factors</span>
@@ -340,6 +443,143 @@ export default function EmployeeProfile() {
             </div>
           </div>
         </div>
+
+        {/* EDR: Behavior Timeline + Activity Explorer */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Behavior timeline */}
+          <div className="lg:col-span-2 p-6 glass-panel">
+            <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-5 flex items-center gap-2">
+              <Activity className="h-4.5 w-4.5 text-cyber-primary" /> Behavior Timeline
+            </h4>
+            <div className="space-y-0">
+              {employee.events.slice(0, 12).map((evt, i) => {
+                const dotColor =
+                  evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
+                  evt.event_type === 'file_copy' || evt.event_type === 'file_create' ? 'bg-cyber-accent' :
+                  evt.event_type === 'file_delete' ? 'bg-cyber-danger' :
+                  evt.event_type === 'network_upload' ? 'bg-cyber-secondary' :
+                  evt.event_type === 'login' ? 'bg-cyber-success' : 'bg-cyber-muted';
+                return (
+                  <div key={evt.id} className="flex gap-4">
+                    <div className="flex flex-col items-center">
+                      <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${dotColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]`}></div>
+                      {i < Math.min(employee.events.length, 12) - 1 && <div className="w-px flex-1 bg-cyber-border/60 my-1"></div>}
+                    </div>
+                    <div className="pb-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-cyber-muted font-mono">
+                          {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
+                          {evt.event_type.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
+                    </div>
+                  </div>
+                );
+              })}
+              {employee.events.length === 0 && (
+                <div className="text-cyber-muted text-xs font-mono py-6 text-center">NO TELEMETRY TO TIMELINE</div>
+              )}
+            </div>
+          </div>
+
+          {/* Activity category explorer + remote commands */}
+          <div className="space-y-6">
+            <div className="p-6 glass-panel">
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4">Activity Explorer</h4>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {[
+                  { key: 'all', label: 'All' },
+                  { key: 'usb', label: 'USB' },
+                  { key: 'process', label: 'Processes' },
+                  { key: 'files', label: 'Files' },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActivityTab(tab.key)}
+                    className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase border transition-colors ${
+                      activityTab === tab.key
+                        ? 'bg-cyber-primary text-cyber-bg border-cyber-primary'
+                        : 'text-cyber-muted border-cyber-border hover:text-cyber-text'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                {employee.events
+                  .filter(evt => {
+                    if (activityTab === 'usb') return evt.event_type.includes('usb');
+                    if (activityTab === 'process') return evt.event_type.includes('process');
+                    if (activityTab === 'files') return evt.event_type.includes('file');
+                    return true;
+                  })
+                  .slice(0, 20)
+                  .map(evt => (
+                    <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
+                      <span className="text-[10px] text-cyber-text">{evt.details || evt.event_type.replace('_', ' ')}</span>
+                      <span className="text-[9px] text-cyber-muted font-mono shrink-0">
+                        {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  ))}
+                {employee.events.filter(e => activityTab === 'all' || (activityTab === 'usb' && e.event_type.includes('usb')) || (activityTab === 'process' && e.event_type.includes('process')) || (activityTab === 'files' && e.event_type.includes('file'))).length === 0 && (
+                  <div className="text-cyber-muted text-xs font-mono text-center py-4">NO ACTIVITY IN THIS CATEGORY</div>
+                )}
+              </div>
+            </div>
+
+            {/* Remote commands (simulated) */}
+            <div className="p-6 glass-panel">
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-1 flex items-center gap-2">
+                <Monitor className="h-4.5 w-4.5 text-cyber-secondary" /> Remote Endpoint Commands
+              </h4>
+              <p className="text-[9px] text-cyber-muted font-mono mb-4">SIMULATED — NO MACHINE CONTROL</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { cmd: 'disable_usb', label: 'Disable USB', color: 'border-cyber-danger/35 text-cyber-danger bg-cyber-danger/10 hover:bg-cyber-danger hover:text-cyber-bg' },
+                  { cmd: 'restart_agent', label: 'Restart Agent', color: 'border-cyber-warning/35 text-cyber-warning bg-cyber-warning/10 hover:bg-cyber-warning hover:text-cyber-bg' },
+                  { cmd: 'collect_logs', label: 'Collect Logs', color: 'border-cyber-secondary/35 text-cyber-secondary bg-cyber-secondary/10 hover:bg-cyber-secondary hover:text-cyber-bg' },
+                  { cmd: 'refresh_config', label: 'Refresh Config', color: 'border-cyber-primary/35 text-cyber-primary bg-cyber-primary/10 hover:bg-cyber-primary hover:text-cyber-bg' },
+                ].map(btn => (
+                  <button
+                    key={btn.cmd}
+                    onClick={() => handleCommand(btn.cmd, btn.label)}
+                    className={`px-2 py-2 rounded border text-[10px] font-mono font-bold uppercase tracking-wide transition-colors ${btn.color}`}
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+
+              {commandMsg && (
+                <div className="mt-3 p-2.5 bg-cyber-success/10 border border-cyber-success/30 rounded text-[10px] text-cyber-success font-mono">
+                  {commandMsg}
+                </div>
+              )}
+              {commandErr && (
+                <div className="mt-3 p-2.5 bg-cyber-danger/10 border border-cyber-danger/30 rounded text-[10px] text-cyber-danger font-mono">
+                  {commandErr}
+                </div>
+              )}
+
+              {commands.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <span className="text-[9px] text-cyber-muted font-mono uppercase tracking-wider block">Command History</span>
+                  {commands.slice(0, 5).map(cmd => (
+                    <div key={cmd.id} className="flex justify-between items-center p-2 bg-cyber-bg/50 border border-cyber-border rounded text-[10px]">
+                      <span className="text-cyber-text font-mono">{cmd.label}</span>
+                      <span className="text-[9px] text-cyber-success font-mono">{cmd.status} · {RELATIVE_TIME(cmd.completed_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -413,8 +653,11 @@ export default function EmployeeProfile() {
                       {emp.name.split(' ').map(n => n[0]).join('')}
                     </div>
                     <div>
-                      <h4 className="font-bold text-cyber-text text-sm">{emp.name}</h4>
-                      <span className="text-[10px] text-cyber-muted font-mono">{emp.department}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`h-2 w-2 rounded-full ${emp.online ? 'bg-cyber-success' : 'bg-cyber-danger'}`}></span>
+                        <h4 className="font-bold text-cyber-text text-sm">{emp.name}</h4>
+                      </div>
+                      <span className="text-[10px] text-cyber-muted font-mono">{emp.department}{emp.hostname ? ` · ${emp.hostname}` : ''}</span>
                     </div>
                   </div>
                   <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${

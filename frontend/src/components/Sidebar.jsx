@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Users, 
-  AlertTriangle, 
-  BarChart3, 
-  Settings, 
-  LogOut, 
-  ShieldCheck, 
+import {
+  LayoutDashboard,
+  Users,
+  AlertTriangle,
+  BarChart3,
+  Settings,
+  LogOut,
+  ShieldCheck,
   Database,
-  RefreshCw
+  RefreshCw,
+  FileBarChart,
+  ScrollText
 } from 'lucide-react';
 import { api } from '../services/mockData';
 
@@ -38,7 +40,12 @@ export default function Sidebar() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleLogout = () => {
+  const role = user.role || 'admin';
+  const isAuditor = role === 'auditor';
+
+  const handleLogout = async () => {
+    // Best-effort server-side revocation before clearing local state.
+    await api.logout();
     localStorage.removeItem('threatvista_token');
     localStorage.removeItem('threatvista_user');
     navigate('/login');
@@ -46,14 +53,18 @@ export default function Sidebar() {
 
   const displayName = user.username ? user.username.charAt(0).toUpperCase() + user.username.slice(1) : 'Administrator';
   const initials = (user.username || 'AD').slice(0, 2).toUpperCase();
-  const roleLabel = user.role === 'analyst' ? 'Security Analyst' : 'SOC Administrator';
+  const roleLabel = role === 'analyst' ? 'Security Analyst' : role === 'auditor' ? 'Read-Only Auditor' : 'SOC Administrator';
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
     { to: '/employees', label: 'Employees', icon: Users },
     { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: true },
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    { to: '/reports', label: 'Reports', icon: FileBarChart },
+    // Settings is a write surface — hidden from the read-only Auditor role.
+    ...(isAuditor ? [] : [{ to: '/settings', label: 'Settings', icon: Settings }]),
+    // Audit trail is administrator-only.
+    ...(role === 'admin' ? [{ to: '/audit', label: 'Audit', icon: ScrollText }] : []),
   ];
 
   return (

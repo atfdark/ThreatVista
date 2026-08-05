@@ -1,0 +1,43 @@
+"""
+ThreatVista runtime configuration.
+
+Centralises environment-driven settings so secrets never live in source code.
+All values can be overridden through a `.env` file at the project root
+(see `.env.example`) or via real environment variables.
+
+Environment variables:
+    THREATVISTA_SECRET_KEY  JWT signing secret. In production this MUST be set
+                            to a long random value.
+    THREATVISTA_CORS_ORIGINS  Comma-separated allowed browser origins.
+    THREATVISTA_AGENT_KEY   Shared secret for endpoint agents. When set,
+                            POST /api/events requires an X-Agent-Key header.
+"""
+import os
+
+from dotenv import load_dotenv
+
+# Load .env from the project root (one level above this package).
+_ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(_ENV_PATH)
+
+
+def _env_list(name: str, default: str) -> list:
+    raw = os.environ.get(name, default)
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+# JWT signing secret. Dev fallback keeps the demo runnable out of the box, but
+# the README warns deployments to set THREATVISTA_SECRET_KEY.
+SECRET_KEY = os.environ.get(
+    "THREATVISTA_SECRET_KEY", "dev-only-insecure-key-change-me"
+)
+
+# Allowed browser origins for CORS (dev defaults are the Vite dev server).
+CORS_ORIGINS = _env_list(
+    "THREATVISTA_CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+
+# Optional shared key for endpoint agents posting telemetry. When empty, the
+# /api/events endpoint stays open (hackathon default).
+AGENT_API_KEY = os.environ.get("THREATVISTA_AGENT_KEY", "")

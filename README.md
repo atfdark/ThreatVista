@@ -22,8 +22,13 @@ Traditional Data Loss Prevention (DLP) systems inspect file contents, raising pr
 - **Event Correlation Engine** — chains related signals (USB + mass copy = exfiltration; deletions + USB removal = cover-up).
 - **Explainable AI (XAI)** — every risk score comes with plain-English *reasons* and *recommendations*.
 - **Real-Time SOC Dashboard** — live WebSocket event feed, risk trends, behavior DNA cards, alert ledger.
-- **Secure Authentication** — bcrypt password hashing, signed JWTs, role-based access (Administrator / Security Analyst).
+- **Secure Authentication** — bcrypt password hashing, signed JWTs with server-side session revocation (real logout), login throttling, and three roles: Administrator / Security Analyst / Read-Only Auditor.
+- **Audit Trail** — every sensitive action (login, alert transitions, settings changes, report downloads) is logged for review.
+- **Downloadable Reports** — daily / weekly / monthly / high-risk / USB / file / network reports as CSV, JSON, or printable HTML.
 - **Persisted Threat Engine Settings** — risk thresholds are configurable and actually drive classification.
+- **Enterprise EDR Architecture** — endpoint agents auto-register their device identity (hostname, OS, CPU, RAM, IP), send live **heartbeats**, and stream telemetry; the dashboard shows **online/offline status**, endpoint device profiles, endpoint health, and per-employee **behavior timelines**.
+- **AI Confidence Score** — every risk assessment includes a 0–100 confidence metric alongside the top reasons.
+- **Remote Endpoint Commands** — the SOC console can dispatch actions (disable USB, restart agent, collect logs, refresh config) — simulated for the hackathon.
 
 ---
 
@@ -133,10 +138,11 @@ python endpoint_agent/agent.py
 
 ## 🔐 Demo Accounts
 
-| Role | Username | Password |
-|------|----------|----------|
-| SOC Administrator | `admin` | `admin123` |
-| Security Analyst | `analyst` | `analyst123` |
+| Role | Username | Password | Scope |
+|------|----------|----------|-------|
+| SOC Administrator | `admin` | `admin123` | Full access incl. audit trail & session management |
+| Security Analyst | `analyst` | `analyst123` | Full monitoring, alert mitigation, settings |
+| Read-Only Auditor | `auditor` | `auditor123` | View everything, no writes (read-only) |
 
 ---
 
@@ -163,21 +169,34 @@ Each scenario injects real telemetry through the API, streams into the dashboard
 
 All data endpoints require `Authorization: Bearer <token>` (except `POST /auth/login` and telemetry ingestion `POST /events`).
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/login` | Authenticate, returns JWT |
-| POST | `/api/auth/logout` | Invalidate session |
-| GET | `/api/auth/me` | Current user + role |
-| GET | `/api/status` | Backend health check |
-| GET | `/api/dashboard` | Risk stats & distributions |
-| GET | `/api/employees` | Employee list |
-| GET | `/api/employees/{id}` | Employee detail + live AI analysis |
-| POST | `/api/events` | Ingest telemetry (agent / demo) |
-| GET | `/api/events` | Query events |
-| GET | `/api/alerts` | Alert ledger |
-| POST | `/api/ai/analyze/{id}` | Run AI, persist risk score |
-| GET | `/api/ai/analysis/{id}` | Run AI, no persistence |
-| GET/PUT | `/api/settings` | Read / update threat engine config |
+| Method | Endpoint | Description | Access |
+|--------|----------|-------------|--------|
+| POST | `/api/auth/login` | Authenticate, returns JWT (throttled: 5 fails → 15-min lockout) | public |
+| POST | `/api/auth/logout` | Revoke current session server-side | any authenticated |
+| GET | `/api/auth/me` | Current user + role | any authenticated |
+| GET | `/api/auth/sessions` | List sessions (admins may filter by `user_id`) | self / admin |
+| DELETE | `/api/auth/sessions/{id}` | Revoke a session (admin/analyst for others, self always) | self / admin |
+| GET | `/api/status` | Backend health check | public |
+| GET | `/api/dashboard` | Risk stats & distributions | any authenticated |
+| GET | `/api/employees` | Employee list | any authenticated |
+| GET | `/api/employees/{id}` | Employee detail + live AI analysis | any authenticated |
+| POST | `/api/events` | Ingest telemetry (agent / demo; `X-Agent-Key` when configured) | agent |
+| GET | `/api/events` | Query events | any authenticated |
+| GET | `/api/alerts` | Alert ledger | any authenticated |
+| PATCH | `/api/alerts/{id}` | Transition alert status (Active → Investigating → Resolved) | admin/analyst |
+| GET | `/api/audit-logs` | Security audit trail (login, settings, alerts, reports…) | admin |
+| POST | `/api/ai/analyze/{id}` | Run AI, persist risk score | admin/analyst |
+| GET | `/api/ai/analysis/{id}` | Run AI, no persistence | any authenticated |
+| GET/PUT | `/api/settings` | Read / update threat engine config | read: all / write: admin,analyst |
+| GET | `/api/reports/{type}` | Download report (`format=csv\|json\|html`, `start`, `end`) | any authenticated |
+| POST | `/api/agent/register` | Register endpoint device for an employee (`employee_email` + device profile) | agent |
+| POST | `/api/agent/heartbeat` | Heartbeat to keep a device online + refresh health | agent |
+| POST | `/api/employees/{id}/commands` | Dispatch a (simulated) remote command | admin/analyst |
+| GET | `/api/employees/{id}/commands` | List command history for an endpoint | any authenticated |
+
+**Reports**: `daily_threat`, `weekly_activity`, `monthly_summary`, `high_risk_employees`, `usb_usage`, `file_activity`, `network_activity`.
+
+**Environment variables** (see `.env.example`): `THREATVISTA_SECRET_KEY` (JWT secret), `THREATVISTA_CORS_ORIGINS`, `THREATVISTA_AGENT_KEY` (optional shared key that protects `POST /events`).
 
 ---
 
@@ -195,8 +214,8 @@ All data endpoints require `Authorization: Bearer <token>` (except `POST /auth/l
 
 ## 👥 User Manual
 
-- **Dashboard** — stat cards, live event feed, ranked employee table, high-risk alerts.
-- **Employees** — search/filter directory; click any employee for Behavior DNA, risk timeline, AI recommendations, raw telemetry.
+- **Dashboard** — stat cards (incl. **Online Endpoints**), live event feed, ranked employee table with online indicators, high-risk alerts.
+- **Employees** — search/filter directory with online/offline dots; click any employee for Behavior DNA, risk timeline, AI confidence, raw telemetry, **endpoint device profile**, endpoint health, **behavior timeline**, activity explorer (USB / processes / files), and **remote command** dispatch.
 - **Alerts** — ledger with severity/status filters; escalate to Investigation.
 - **Analytics** — AI/hardware/network panels, risk & severity distributions.
 - **Settings** — adjust risk classification thresholds and telemetry toggles; changes persist and immediately affect the AI engine.
