@@ -57,13 +57,17 @@ def check_backend_health():
 
 
 def register_device(employee_email: str, device_info: dict):
-    """Register this machine's device for the employee. Returns device_id."""
+    """Register this machine's device for the employee.
+
+    Returns ``(result, err)`` where ``result`` is the backend's full response
+    dict (``{registered, employee_id, device_id}``) so the agent can attach the
+    *correct* employee identity to every subsequent event.
+    """
     payload = {"employee_email": employee_email, **device_info}
     try:
         response = requests.post(f"{API_BASE_URL}/agent/register", json=payload, headers=_headers(), timeout=10)
         if response.status_code == 200:
-            data = response.json()
-            return data.get("device_id"), None
+            return response.json(), None
         return None, response.json().get("detail", f"register failed ({response.status_code})")
     except Exception as exc:
         return None, str(exc)

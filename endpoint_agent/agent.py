@@ -52,14 +52,20 @@ class EndpointAgent:
         send_event(event_data)
 
     def _register(self):
-        """Register this machine's device and resolve the employee identity."""
+        """Register this machine's device and resolve the employee identity.
+
+        The backend resolves the employee from AGENT_EMPLOYEE_EMAIL and returns
+        their real id in the registration response. Without this, events fell
+        back to employee_id=1 (the directory lookup needs auth and fails).
+        """
         device_info = get_device_info()
-        device_id, err = register_device(EMPLOYEE_EMAIL, device_info)
+        result, err = register_device(EMPLOYEE_EMAIL, device_info)
         if err:
             print(f"[!] Device registration failed: {err}")
             return
-        self.device_id = device_id
-        print(f"[+] Registered device {device_id} for {EMPLOYEE_EMAIL}")
+        self.device_id = result.get("device_id")
+        self.employee_id = result.get("employee_id")
+        print(f"[+] Registered device {self.device_id} for {EMPLOYEE_EMAIL} (employee id {self.employee_id})")
 
     def start(self):
         print(f"[*] ThreatVista Endpoint Agent starting for {EMPLOYEE_EMAIL}")
