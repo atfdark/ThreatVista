@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -101,13 +101,47 @@ export default function EmployeeProfile() {
     return () => clearInterval(t);
   }, [loadData]);
 
-  // When this employee's device registers (token-based enrollment), refresh so
-  // Endpoint Status flips to ONLINE immediately.
+  // Live telemetry / risk / incidents → refresh this employee's detail so
+  // Activity Explorer, Behavior DNA, and Historical Risk stay current.
+  // Debounced so a busy endpoint's batch flood doesn't hammer the AI endpoint.
+  const refreshTimer = useRef(null);
   useWebSocket((msg) => {
-    if (msg.type === 'device_connected' && (msg.data?.employee?.id === parseInt(id) || !id)) {
-      loadData(true);
+    const empId = id ? parseInt(id, 10) : null;
+    const data = msg.data || {};
+    const matchesEmployee = (() => {
+      if (!empId) return true; // directory view — any device/event may matter
+      if (msg.type === 'device_connected') return data.employee?.id === empId;
+      if (msg.type === 'batch_event') {
+        if (data.employee_id === empId) return true;
+        return (data.events || []).some(e => e.employee_id === empId);
+      }
+      if (msg.type === 'risk_update') return Object.prototype.hasOwnProperty.call(data, empId) || Object.prototype.hasOwnProperty.call(data, String(empId));
+      if (data.employee_id != null) return data.employee_id === empId;
+      if (data.employee?.id != null) return data.employee.id === empId;
+      return false;
+    })();
+
+    if (!matchesEmployee) return;
+
+    if ([
+      'device_connected',
+      'new_event',
+      'new_alert',
+      'batch_event',
+      'risk_update',
+      'incident_created',
+      'incident_updated',
+      'incident_resolved',
+      'incident_archived',
+    ].includes(msg.type)) {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => loadData(true), 800);
     }
   });
+
+  useEffect(() => () => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  }, []);
 
   if (loading) {
     return (
@@ -124,13 +158,34 @@ export default function EmployeeProfile() {
   // RENDER DETAILED PROFILE
   // ==========================================
   if (id && employee) {
-    const dna = employee.behavior_profile || { working_hours_baseline: "09:00 - 17:00", avg_usb_inserts_per_day: 0, avg_file_copies_per_day: 0, avg_upload_mb_per_day: 0 };
-    
+    const events = Array.isArray(employee.events) ? employee.events : [];
+    const alerts = Array.isArray(employee.alerts) ? employee.alerts : [];
+    const dna = employee.behavior_profile || {
+      working_hours_baseline: "09:00 - 17:00",
+      avg_usb_inserts_per_day: 0,
+      avg_file_copies_per_day: 0,
+      avg_upload_mb_per_day: 0,
+    };
+    const fmtAvg = (n) => {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return '0';
+      return v < 10 ? v.toFixed(2) : String(Math.round(v * 10) / 10);
+    };
+
     // Format chart date
     const chartData = (employee.risk_scores || []).map(score => ({
-      date: formatIST(score.recorded_at, { month: 'short', day: 'numeric' }),
+      date: formatIST(score.recorded_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
       score: score.score
     }));
+
+    const matchesActivityTab = (evt) => {
+      const t = evt.event_type || '';
+      if (activityTab === 'usb') return t.includes('usb');
+      if (activityTab === 'process') return t.includes('process');
+      if (activityTab === 'files') return t.includes('file') || t.includes('folder');
+      if (activityTab === 'system') return t.includes('system') || t.includes('network') || t.includes('login');
+      return true;
+    };
 
     // AI recommendation rules
     const getRecommendations = (score) => {
@@ -329,7 +384,7 @@ export default function EmployeeProfile() {
                 // deleted / modified files) is the DLP signal that matters, so
                 // keep those entries always visible instead of letting process /
                 // network noise push them off the window.
-                const sorted = [...employee.events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+                const sorted = [...events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
                 const isFile = (e) => (e.event_type || '').startsWith('file_') || (e.event_type || '').startsWith('folder_');
                 const files = sorted.filter(isFile);
                 const others = sorted.filter((e) => !isFile(e));
@@ -355,7 +410,7 @@ export default function EmployeeProfile() {
                             {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                           </span>
                           <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
-                            {evt.event_type.replace('_', ' ')}
+                            {(evt.event_type || '').replace(/_/g, ' ')}
                           </span>
                         </div>
                         <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
@@ -364,7 +419,7 @@ export default function EmployeeProfile() {
                   );
                 });
               })()}
-              {employee.events.length === 0 && (
+              {events.length === 0 && (
                 <div className="text-cyber-muted text-xs font-mono py-6 text-center">NO TELEMETRY TO TIMELINE</div>
               )}
             </div>
@@ -380,6 +435,7 @@ export default function EmployeeProfile() {
                   { key: 'usb', label: 'USB' },
                   { key: 'process', label: 'Processes' },
                   { key: 'files', label: 'Files' },
+                  { key: 'system', label: 'System' },
                 ].map(tab => (
                   <button
                     key={tab.key}
@@ -395,24 +451,24 @@ export default function EmployeeProfile() {
                 ))}
               </div>
               <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
-                {employee.events
-                  .filter(evt => {
-                    if (activityTab === 'usb') return evt.event_type.includes('usb');
-                    if (activityTab === 'process') return evt.event_type.includes('process');
-                    if (activityTab === 'files') return evt.event_type.includes('file');
-                    return true;
-                  })
+                {events
+                  .filter(matchesActivityTab)
                   .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
                   .slice(0, 20)
                   .map(evt => (
                     <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
-                      <span className="text-[10px] text-cyber-text">{evt.details || evt.event_type.replace('_', ' ')}</span>
+                      <div className="min-w-0">
+                        <span className="text-[9px] font-mono uppercase text-cyber-muted block">
+                          {(evt.event_type || '').replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[10px] text-cyber-text break-words">{evt.details || (evt.event_type || '').replace(/_/g, ' ')}</span>
+                      </div>
                       <span className="text-[9px] text-cyber-muted font-mono shrink-0">
                         {formatIST(evt.timestamp, { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   ))}
-                {employee.events.filter(e => activityTab === 'all' || (activityTab === 'usb' && e.event_type.includes('usb')) || (activityTab === 'process' && e.event_type.includes('process')) || (activityTab === 'files' && e.event_type.includes('file'))).length === 0 && (
+                {events.filter(matchesActivityTab).length === 0 && (
                   <div className="text-cyber-muted text-xs font-mono text-center py-4">NO ACTIVITY IN THIS CATEGORY</div>
                 )}
               </div>
@@ -475,22 +531,22 @@ export default function EmployeeProfile() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="p-4 bg-cyber-card/60 border border-cyber-border rounded-lg">
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Baseline Shift Hours</span>
-              <span className="text-lg font-bold text-cyber-text block mt-1">{dna.working_hours_baseline}</span>
+              <span className="text-lg font-bold text-cyber-text block mt-1">{dna.working_hours_baseline || '09:00 - 17:00'}</span>
               <span className="text-[9px] text-cyber-muted font-mono block mt-1">Normal daily working boundary</span>
             </div>
             <div className="p-4 bg-cyber-card/60 border border-cyber-border rounded-lg">
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Avg Daily USB Inserts</span>
-              <span className="text-lg font-bold text-cyber-text block mt-1">{dna.avg_usb_inserts_per_day} insertions/day</span>
+              <span className="text-lg font-bold text-cyber-text block mt-1">{fmtAvg(dna.avg_usb_inserts_per_day)} insertions/day</span>
               <span className="text-[9px] text-cyber-muted font-mono block mt-1">Plug & Play hardware interactions</span>
             </div>
             <div className="p-4 bg-cyber-card/60 border border-cyber-border rounded-lg">
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Avg Daily Copies</span>
-              <span className="text-lg font-bold text-cyber-text block mt-1">{dna.avg_file_copies_per_day} operations/day</span>
+              <span className="text-lg font-bold text-cyber-text block mt-1">{fmtAvg(dna.avg_file_copies_per_day)} operations/day</span>
               <span className="text-[9px] text-cyber-muted font-mono block mt-1">File system read & copy transfers</span>
             </div>
             <div className="p-4 bg-cyber-card/60 border border-cyber-border rounded-lg">
               <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Avg Daily Network Upload</span>
-              <span className="text-lg font-bold text-cyber-text block mt-1">{dna.avg_upload_mb_per_day} MB/day</span>
+              <span className="text-lg font-bold text-cyber-text block mt-1">{fmtAvg(dna.avg_upload_mb_per_day)} MB/day</span>
               <span className="text-[9px] text-cyber-muted font-mono block mt-1">Outbound packet bandwidth baseline</span>
             </div>
           </div>
@@ -502,32 +558,38 @@ export default function EmployeeProfile() {
           <div className="lg:col-span-2 p-6 glass-panel">
             <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-6">Historical Risk Progression</h4>
             <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="colorRisk" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
-                  <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickLine={false} />
-                  <YAxis stroke="#64748b" fontSize={11} tickLine={false} domain={[0, 100]} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#0f1626', borderColor: '#1e293b', borderRadius: 8, fontSize: 11 }}
-                    itemStyle={{ color: '#f8fafc' }}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="score" 
-                    stroke={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} 
-                    strokeWidth={2}
-                    fillOpacity={1} 
-                    fill="url(#colorRisk)" 
-                    name="Risk score %"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {chartData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-cyber-muted text-xs font-mono text-center px-6">
+                  NO RISK HISTORY YET — SCORES APPEAR AS TELEMETRY IS ANALYZED
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="colorRisk" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} stopOpacity={0.4}/>
+                        <stop offset="95%" stopColor={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
+                    <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickLine={false} />
+                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} domain={[0, 100]} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f1626', borderColor: '#1e293b', borderRadius: 8, fontSize: 11 }}
+                      itemStyle={{ color: '#f8fafc' }}
+                    />
+                    <Area 
+                      type="monotone" 
+                      dataKey="score" 
+                      stroke={employee.risk_score > 75 ? '#ef4444' : '#06b6d4'} 
+                      strokeWidth={2}
+                      fillOpacity={1} 
+                      fill="url(#colorRisk)" 
+                      name="Risk score %"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -567,12 +629,15 @@ export default function EmployeeProfile() {
                   </div>
                   <div className="space-y-2">
                     <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider">Detected Risk Factors</span>
-                    {aiAnalysis.reasons.map((reason, i) => (
+                    {(aiAnalysis.reasons || []).map((reason, i) => (
                       <div key={i} className="flex items-start gap-2">
                         <CheckCircle className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${aiAnalysis.risk_score > 75 ? 'text-cyber-danger' : 'text-cyber-primary'}`} />
                         <span className="text-[11px] text-cyber-text leading-relaxed">{reason}</span>
                       </div>
                     ))}
+                    {(aiAnalysis.reasons || []).length === 0 && (
+                      <p className="text-[11px] text-cyber-muted font-mono">No elevated risk factors detected.</p>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -592,9 +657,9 @@ export default function EmployeeProfile() {
             {aiAnalysis && (
               <div className="text-[10.5px] text-cyber-muted font-mono leading-relaxed mt-4 p-3 bg-cyber-border/20 border border-cyber-border rounded">
                 <span className="text-cyber-text font-bold uppercase block mb-1">AI Model Output</span>
-                Isolation Forest raw score: {aiAnalysis.model_score.toFixed(4)} | Anomaly: {aiAnalysis.model_anomaly ? 'Yes' : 'No'}
+                Isolation Forest raw score: {Number(aiAnalysis.model_score ?? 0).toFixed(4)} | Anomaly: {aiAnalysis.model_anomaly ? 'Yes' : 'No'}
                 <br/>
-                Recommended: {aiAnalysis.recommendations.slice(0, 2).join('; ')}
+                Recommended: {(aiAnalysis.recommendations || []).slice(0, 2).join('; ') || 'Continue monitoring'}
               </div>
             )}
           </div>
@@ -615,7 +680,7 @@ export default function EmployeeProfile() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-cyber-border/40 font-mono">
-                  {employee.events.map((evt) => (
+                  {events.map((evt) => (
                     <tr key={evt.id} className="hover:bg-cyber-border/10">
                       <td className="py-2.5 pl-3">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${
@@ -624,7 +689,7 @@ export default function EmployeeProfile() {
                           evt.event_type === 'network_upload' ? 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' :
                           'text-cyber-muted border-cyber-border bg-cyber-bg/50'
                         }`}>
-                          {evt.event_type.replace('_', ' ')}
+                          {(evt.event_type || '').replace(/_/g, ' ')}
                         </span>
                       </td>
                       <td className="py-2.5 text-xs text-cyber-text">{evt.details}</td>
@@ -633,6 +698,13 @@ export default function EmployeeProfile() {
                       </td>
                     </tr>
                   ))}
+                  {events.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-8 text-center text-cyber-muted font-mono text-xs">
+                        NO TELEMETRY EVENTS YET
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -642,12 +714,12 @@ export default function EmployeeProfile() {
           <div className="p-6 glass-panel">
             <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4">Correlated Security Alerts</h4>
             <div className="space-y-4">
-              {employee.alerts.length === 0 ? (
+              {alerts.length === 0 ? (
                 <div className="text-center py-8 text-cyber-muted text-xs font-mono">
                   NO ACTIVE CORRELATED ALERTS
                 </div>
               ) : (
-                employee.alerts.map((alert) => (
+                alerts.map((alert) => (
                   <div key={alert.id} className="p-3 bg-cyber-bg/50 border border-cyber-border rounded-lg space-y-1.5">
                     <div className="flex justify-between items-center">
                       <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase ${

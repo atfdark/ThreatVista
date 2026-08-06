@@ -56,15 +56,19 @@ class BehaviorDNA:
                 except Exception:
                     pass
 
+        # Use observed day span (clamped to 1–30) so brand-new employees show
+        # meaningful per-day averages instead of everything diluted by /30.
+        days = _observed_days(window_30d, now)
+
         baseline = {
             "employee_id": employee_id,
             "working_hours_baseline": _working_hours_str(login_hours),
-            "avg_usb_inserts_per_day": usb_inserts / 30 if window_30d else 0,
-            "avg_file_copies_per_day": file_copies / 30 if window_30d else 0,
-            "avg_upload_mb_per_day": upload_mb / 30 if window_30d else 0,
-            "avg_process_starts_per_day": process_starts / 30 if window_30d else 0,
-            "avg_cpu_usage": np.mean(cpu_vals) if cpu_vals else 0,
-            "avg_ram_usage": np.mean(ram_vals) if ram_vals else 0,
+            "avg_usb_inserts_per_day": round(usb_inserts / days, 2) if window_30d else 0,
+            "avg_file_copies_per_day": round(file_copies / days, 2) if window_30d else 0,
+            "avg_upload_mb_per_day": round(upload_mb / days, 2) if window_30d else 0,
+            "avg_process_starts_per_day": round(process_starts / days, 2) if window_30d else 0,
+            "avg_cpu_usage": float(np.mean(cpu_vals)) if cpu_vals else 0,
+            "avg_ram_usage": float(np.mean(ram_vals)) if ram_vals else 0,
             "night_activity_rate": night_count / max(len(window_30d), 1),
             "weekend_activity_rate": weekend_count / max(len(window_30d), 1),
             "updated_at": datetime.utcnow().isoformat()
@@ -108,6 +112,26 @@ def _within_days(ts, now, days):
         return (now - t).total_seconds() <= days * 86400
     except Exception:
         return False
+
+def _observed_days(events, now):
+    """Return 1–30 based on the oldest event in the window."""
+    if not events:
+        return 1.0
+    oldest = None
+    for e in events:
+        ts = e.get("timestamp")
+        if not ts:
+            continue
+        try:
+            t = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+            if oldest is None or t < oldest:
+                oldest = t
+        except Exception:
+            continue
+    if oldest is None:
+        return 1.0
+    span = max(1.0, (now - oldest).total_seconds() / 86400.0)
+    return min(30.0, span)
 
 def _parse_mb(val):
     if val is None:

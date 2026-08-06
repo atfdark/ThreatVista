@@ -39,19 +39,68 @@ def run_ai_for_employee(db: Session, employee_id: int) -> dict:
     return _ai_pipeline.run(raw, employee_id, thresholds)
 
 
-def persist_risk_and_correlations(db: Session, employee_id: int, result: dict) -> None:
-    """Persist an AI result onto the employee row + alert ledger.
+# Throttle risk-history writes so a busy endpoint doesn't flood risk_scores.
+_RISK_HISTORY_MIN_SECONDS = 300
 
-    Updates the employee's live risk score/status and turns correlation
-    incidents into alert rows (deduping exact active ones so a persisting
-    pattern doesn't spam the ledger). Does NOT commit — the caller commits
-    once after the whole batch is processed.
+
+def persist_behavior_profile(db: Session, employee_id: int, baseline: dict) -> None:
+    """Upsert the employee's Behavior DNA row from a freshly computed baseline."""
+    if not baseline:
+        return
+    profile = (
+        db.query(models.BehaviorProfile)
+        .filter(models.BehaviorProfile.employee_id == employee_id)
+        .first()
+    )
+    if profile is None:
+        profile = models.BehaviorProfile(employee_id=employee_id)
+        db.add(profile)
+
+    profile.working_hours_baseline = baseline.get("working_hours_baseline") or "09:00 - 17:00"
+    profile.avg_usb_inserts_per_day = float(baseline.get("avg_usb_inserts_per_day") or 0)
+    profile.avg_file_copies_per_day = float(baseline.get("avg_file_copies_per_day") or 0)
+    profile.avg_upload_mb_per_day = float(baseline.get("avg_upload_mb_per_day") or 0)
+    profile.updated_at = datetime.utcnow()
+
+
+def persist_risk_history(db: Session, employee_id: int, score: int) -> None:
+    """Append a risk_scores point when the score changes or enough time elapsed."""
+    now = datetime.utcnow()
+    last = (
+        db.query(models.RiskScore)
+        .filter(models.RiskScore.employee_id == employee_id)
+        .order_by(models.RiskScore.recorded_at.desc())
+        .first()
+    )
+    if last is not None:
+        age = (now - last.recorded_at).total_seconds() if last.recorded_at else _RISK_HISTORY_MIN_SECONDS
+        if last.score == int(score) and age < _RISK_HISTORY_MIN_SECONDS:
+            return
+    db.add(models.RiskScore(
+        employee_id=employee_id,
+        score=int(score),
+        recorded_at=now,
+    ))
+
+
+def persist_risk_and_correlations(db: Session, employee_id: int, result: dict) -> None:
+    """Persist an AI result onto the employee row + alert ledger + DNA + history.
+
+    Updates the employee's live risk score/status, Behavior DNA baseline, risk
+    progression history, and turns correlation incidents into alert rows
+    (deduping exact active ones so a persisting pattern doesn't spam the
+    ledger). Does NOT commit — the caller commits once after the whole batch
+    is processed.
     """
     explanation = result.get("explanation", {})
+    score = int(explanation.get("risk_score", 0))
     emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if emp:
-        emp.risk_score = int(explanation.get("risk_score", 0))
+        emp.risk_score = score
         emp.status = explanation.get("status", "Safe")
+
+    persist_behavior_profile(db, employee_id, result.get("baseline") or {})
+    persist_risk_history(db, employee_id, score)
 
     for incident in result.get("correlations", []):
         reason = incident.get("reason") or incident.get("name") or "Correlation"

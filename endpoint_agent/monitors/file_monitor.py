@@ -94,6 +94,7 @@ class ThreatFileHandler(FileSystemEventHandler):
             filename = os.path.basename(path)
             extension = os.path.splitext(filename)[1].lower()
             folder = os.path.dirname(path)
+            folder_label = os.path.basename(folder) or folder or "unknown"
 
             size = None
             try:
@@ -109,7 +110,7 @@ class ThreatFileHandler(FileSystemEventHandler):
                 "extension": extension,
                 "size": size_str,
                 "folder": folder,
-                "details": f"{event_type.replace('_', ' ').title()}: {filename} in {os.path.basename(folder)}"
+                "details": f"{event_type.replace('_', ' ').title()}: {filename} in {folder_label}"
             })
         except Exception as e:
             print(f"File monitor error: {e}")

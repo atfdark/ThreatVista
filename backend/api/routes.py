@@ -415,12 +415,21 @@ async def register(
 
     # Add to the employee directory so the person is visible/monitorable in SOC.
     if db.query(models.Employee).filter(models.Employee.email == username).first() is None:
-        db.add(models.Employee(
+        emp = models.Employee(
             name=payload.name,
             email=username,
             department=payload.department or "General",
             risk_score=0,
             status="Normal",
+        )
+        db.add(emp)
+        db.flush()  # get emp.id before creating the DNA row
+        db.add(models.BehaviorProfile(
+            employee_id=emp.id,
+            working_hours_baseline="09:00 - 17:00",
+            avg_usb_inserts_per_day=0.0,
+            avg_file_copies_per_day=0.0,
+            avg_upload_mb_per_day=0.0,
         ))
 
     db.commit()
@@ -641,15 +650,35 @@ def get_employee_detail(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    employee.events = sorted(employee.events, key=lambda x: x.timestamp, reverse=True)
-    employee.risk_scores = sorted(employee.risk_scores, key=lambda x: x.recorded_at)
-
     result = _run_ai(db, employee_id)
     explanation = result["explanation"]
+    # Persist live DNA + risk history + correlation alerts so Behavior DNA and
+    # Historical Risk Progression stay current for self-registered employees
+    # who never got a seeded profile.
+    batch_service.persist_risk_and_correlations(db, employee_id, result)
     employee.risk_score = int(explanation["risk_score"])
     employee.status = explanation["status"]
     incident_service.apply_risk(db, employee_id, result)
     db.commit()
+
+    # Reload relationships after persistence so the response reflects the
+    # freshly written Behavior DNA and risk history.
+    db.refresh(employee)
+    employee.behavior_profile = (
+        db.query(models.BehaviorProfile)
+        .filter(models.BehaviorProfile.employee_id == employee_id)
+        .first()
+    )
+    # Cap the stream sent to the UI — AI already ran over the full history.
+    all_events = sorted(employee.events, key=lambda x: x.timestamp or datetime.min, reverse=True)
+    employee.events = all_events[:100]
+    employee.risk_scores = sorted(
+        db.query(models.RiskScore)
+        .filter(models.RiskScore.employee_id == employee_id)
+        .order_by(models.RiskScore.recorded_at.asc())
+        .all(),
+        key=lambda x: x.recorded_at,
+    )
     employee.ai_analysis = _build_analysis_response(db, employee_id, result)
 
     # EDR device + online status + endpoint health + command history
