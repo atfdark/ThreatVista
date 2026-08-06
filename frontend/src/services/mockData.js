@@ -6,7 +6,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
 
 // Authenticated axios instance: attaches the JWT from localStorage to every
 // request and redirects to /login when the token is rejected by the backend.
-const http = axios.create({ baseURL: API_BASE_URL, timeout: 3000 });
+const http = axios.create({ baseURL: API_BASE_URL, timeout: 15000 });
 
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('threatvista_token');

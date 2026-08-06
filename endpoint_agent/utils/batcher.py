@@ -4,15 +4,18 @@ Thread-safe event batcher for the endpoint agent.
 Collects telemetry events in a small buffer and flushes them as one batch via a
 background thread — either when ~``flush_interval`` seconds have elapsed since
 the first buffered event, or when ``max_events`` have accumulated. This turns a
-150-file burst into 1-2 HTTP requests instead of 150, while still feeling
+150-file burst into 1 HTTP request instead of 150, while still feeling
 near-real-time for sparse events.
+
+TUNING: max_events=500 ensures a 150-file burst goes as ONE batch (not split
+across two). flush_interval=0.5s keeps sparse events snappy.
 """
 import threading
 import time
 
 
 class EventBatcher:
-    def __init__(self, flush_callback, max_events=100, flush_interval=1.0):
+    def __init__(self, flush_callback, max_events=500, flush_interval=0.5):
         self._flush_callback = flush_callback
         self._max_events = max_events
         self._flush_interval = flush_interval
@@ -59,9 +62,9 @@ class EventBatcher:
 
     def _run(self):
         while not self._stop.is_set():
-            # Wake on a short tick so a sparse batch still flushes ~1s after its
-            # first event. The 0.2s granularity keeps the ~1s cadence snappy.
-            self._wake.wait(timeout=0.2)
+            # Wake on a short tick so a sparse batch still flushes ~0.5s after
+            # its first event. The 0.1s granularity keeps the cadence snappy.
+            self._wake.wait(timeout=0.1)
             self._wake.clear()
             with self._lock:
                 if not self._buffer:

@@ -6,10 +6,13 @@ plus a single consolidated risk / incident / alert result that the endpoint
 broadcasts as ONE WebSocket message. Every raw event is preserved in the
 ``events`` table.
 
-The AI pipeline runs exactly once per employee per batch (never per event), and
-the correlation engine's batch analyser turns a 150-file burst into one
-"Mass File Activity" incident summary instead of 150 UI updates.
+PERFORMANCE: The batch endpoint uses ``process_batch_fast()`` which inserts
+events and broadcasts them IMMEDIATELY to the dashboard, then runs the heavy
+AI pipeline in a background thread so the admin sees all 150 file events
+within ~1 second instead of waiting for the ML pipeline to finish.
 """
+import asyncio
+import threading
 from datetime import datetime
 from collections import defaultdict
 
@@ -114,6 +117,139 @@ def _pick_primary_incident(incidents: list, total_events: int) -> dict:
         "reason": top["reason"],
         "total_events": total_events,
     }
+
+
+def process_batch_fast(db: Session, events_data: list[dict]) -> dict:
+    """Fast-path batch ingest: insert events + broadcast IMMEDIATELY.
+
+    Steps:
+      1. Bulk insert all events (one transaction).
+      2. Aggregated rule-based alerts for the batch (fast).
+      3. Burst incident detection over the batch's events (fast).
+      4. One commit for events + batch alerts.
+      5. Return the WebSocket payload IMMEDIATELY (no AI pipeline).
+
+    The heavy AI pipeline (risk scoring, incident lifecycle) runs later
+    in a background thread via ``run_ai_background()``.
+    """
+    events = EventService.bulk_create(db, events_data)
+    total_events = len(events)
+
+    # 2. Aggregated rule alerts for the whole batch (at most one per trigger).
+    batch_alerts = RuleBasedAlertEngine.evaluate_batch(db, events) or []
+
+    # 3. Burst incidents over the batch (uses the freshly-flushed IDs).
+    serialized = [_serialize_event(e) for e in events]
+    incidents = _ai_pipeline.corr.analyze_batch(serialized)
+
+    # Build employee name lookup from the batch.
+    employees_by_id = {}
+    emp_ids = {e.employee_id for e in events}
+    for employee_id in emp_ids:
+        emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+        if emp:
+            employees_by_id[employee_id] = emp.name
+
+    # 4. One commit for events + batch alerts.
+    db.commit()
+
+    primary_employee_id = events[0].employee_id if events else None
+    primary_employee_name = employees_by_id.get(primary_employee_id)
+    alert_payloads = [_serialize_alert(a, employees_by_id.get(a.employee_id)) for a in batch_alerts]
+
+    return {
+        "summary": _pick_primary_incident(incidents, total_events),
+        "employee_id": primary_employee_id,
+        "employee_name": primary_employee_name,
+        "total_events": total_events,
+        "risk": {"score": 0, "status": "Safe", "confidence": 0},
+        "alerts": alert_payloads,
+        "incidents": incidents,
+        "events": serialized,
+        "timestamp": datetime.utcnow().isoformat(),
+        "incident_changes": [],
+    }
+
+
+def run_ai_background(emp_ids: set, serialized_events: list, batch_alerts_data: list):
+    """Run the heavy AI pipeline in a background thread, then broadcast results.
+
+    This keeps the batch HTTP response and initial WebSocket broadcast instant
+    while still computing risk scores, incidents, and correlation alerts.
+    """
+    from backend.database.connection import SessionLocal
+    from backend.websocket.manager import manager
+
+    def _work():
+        db = SessionLocal()
+        try:
+            incident_changes = []
+            risk_by_employee = {}
+
+            for employee_id in emp_ids:
+                try:
+                    result = run_ai_for_employee(db, employee_id)
+                    persist_risk_and_correlations(db, employee_id, result)
+                    explanation = result.get("explanation", {})
+                    risk_by_employee[employee_id] = {
+                        "score": int(explanation.get("risk_score", 0)),
+                        "status": explanation.get("status", "Safe"),
+                        "confidence": explanation.get("confidence", 0),
+                    }
+
+                    # Build evidence from this batch's events for this employee.
+                    emp_events = [ev for ev in serialized_events if ev.get("employee_id") == employee_id]
+                    emp_incidents = _ai_pipeline.corr.analyze_batch(emp_events)
+                    evidence = [
+                        {"title": f"{inc.get('name', 'Burst activity')} ({inc.get('count', 0)} events)",
+                         "detail": inc.get("reason", "")}
+                        for inc in emp_incidents
+                    ]
+                    for alert_data in batch_alerts_data:
+                        if alert_data.get("employee_id") == employee_id:
+                            evidence.append({"title": f"Alert: {alert_data.get('reason', '')}", "detail": alert_data.get("severity", "")})
+                    title_hint = emp_incidents[0]["name"] if emp_incidents else None
+
+                    change = incident_service.apply_risk(db, employee_id, result,
+                                                         title_hint=title_hint, evidence=evidence)
+                    if change:
+                        incident_changes.append({
+                            "event_type": change[0],
+                            "incident": incident_service.serialize(db, change[1]),
+                        })
+                except Exception as exc:
+                    print(f"[batch-bg] AI failed for employee {employee_id}: {exc}")
+
+            db.commit()
+
+            # Broadcast AI results (risk updates + incident changes) via WebSocket.
+            # Use broadcast_nowait from within the thread by scheduling on the
+            # event loop.
+            if incident_changes or risk_by_employee:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+
+                for change in incident_changes:
+                    msg = {"type": change["event_type"], "data": change["incident"]}
+                    if loop:
+                        loop.call_soon_threadsafe(manager.broadcast_nowait, msg)
+
+                # Broadcast a risk-update message so the dashboard can refresh
+                # employee risk scores without waiting for the 15s poll.
+                if risk_by_employee:
+                    risk_msg = {"type": "risk_update", "data": risk_by_employee}
+                    if loop:
+                        loop.call_soon_threadsafe(manager.broadcast_nowait, risk_msg)
+
+        except Exception as exc:
+            print(f"[batch-bg] Background AI processing error: {exc}")
+        finally:
+            db.close()
+
+    thread = threading.Thread(target=_work, name="batch-ai-bg", daemon=True)
+    thread.start()
 
 
 def process_batch(db: Session, events_data: list[dict]) -> dict:

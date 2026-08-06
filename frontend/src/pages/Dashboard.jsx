@@ -201,10 +201,10 @@ export default function Dashboard() {
     );
   }
 
-  const totalEmployees = stats?.total_employees || 156;
-  const highRisk = stats?.high_risk || 2;
-  const activeAlerts = stats?.active_alerts || 6;
-  const averageRisk = stats?.average_risk || 18;
+  const totalEmployees = stats?.total_employees || 0;
+  const highRisk = stats?.high_risk || 0;
+  const activeAlerts = stats?.active_alerts || 0;
+  const averageRisk = stats?.average_risk || 0;
   const onlineEmployees = stats?.online_employees ?? 0;
   const offlineEmployees = stats?.offline_employees ?? 0;
 

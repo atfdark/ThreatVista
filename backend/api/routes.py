@@ -816,9 +816,11 @@ async def create_event_batch(
 ):
     """Bulk-ingest one agent batch in a single transaction.
 
-    Inserts every event, runs the AI engine ONCE per employee in the batch,
-    detects burst incidents (e.g. "Mass File Activity — 150 files") and
-    broadcasts ONE consolidated WebSocket message instead of one per event.
+    FAST PATH: inserts events, evaluates batch alerts, and broadcasts
+    the WebSocket message IMMEDIATELY — the dashboard sees all events
+    within ~1 second. The heavy AI pipeline (risk scoring, incident
+    lifecycle) runs in a background thread so it never blocks the
+    response or the live feed.
     """
     if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
         raise HTTPException(
@@ -829,13 +831,24 @@ async def create_event_batch(
         return {"ingested": 0, "incidents": 0}
 
     event_data = [evt.model_dump() for evt in payload.events]
-    result = batch_service.process_batch(db, event_data)
 
+    # Fast path: insert + broadcast immediately (no AI pipeline).
+    result = batch_service.process_batch_fast(db, event_data)
+
+    # Broadcast events to all connected dashboards RIGHT NOW.
     await manager.broadcast({"type": "batch_event", "data": result})
-    # Additive incident lifecycle broadcasts alongside the consolidated batch.
-    for change in result.get("incident_changes", []):
-        await manager.broadcast({"type": change["event_type"], "data": change["incident"]})
-    return {"ingested": len(event_data), "incidents": len(result["incidents"])}
+
+    # Kick off the heavy AI pipeline in a background thread so risk scores,
+    # incidents, and correlation alerts still get computed — just not blocking
+    # the HTTP response or the live event feed.
+    emp_ids = {evt.get("employee_id", 1) for evt in event_data}
+    batch_service.run_ai_background(
+        emp_ids,
+        result.get("events", []),
+        result.get("alerts", []),
+    )
+
+    return {"ingested": len(event_data), "incidents": len(result.get("incidents", []))}
 
 @router.get("/events", response_model=List[EventResponse])
 def get_events(
