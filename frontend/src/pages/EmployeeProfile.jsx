@@ -324,33 +324,46 @@ export default function EmployeeProfile() {
               <Activity className="h-4.5 w-4.5 text-cyber-primary" /> Behavior Timeline
             </h4>
             <div className="space-y-0">
-              {[...employee.events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 12).map((evt, i) => {
-                const dotColor =
-                  evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
-                  evt.event_type === 'file_copy' || evt.event_type === 'file_create' ? 'bg-cyber-accent' :
-                  evt.event_type === 'file_delete' ? 'bg-cyber-danger' :
-                  evt.event_type === 'network_upload' ? 'bg-cyber-secondary' :
-                  evt.event_type === 'login' ? 'bg-cyber-success' : 'bg-cyber-muted';
-                return (
-                  <div key={evt.id} className="flex gap-4">
-                    <div className="flex flex-col items-center">
-                      <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${dotColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]`}></div>
-                      {i < Math.min(employee.events.length, 12) - 1 && <div className="w-px flex-1 bg-cyber-border/60 my-1"></div>}
-                    </div>
-                    <div className="pb-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-cyber-muted font-mono">
-                          {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
-                          {evt.event_type.replace('_', ' ')}
-                        </span>
+              {(() => {
+                // Chronological newest-first. File/folder activity (created /
+                // deleted / modified files) is the DLP signal that matters, so
+                // keep those entries always visible instead of letting process /
+                // network noise push them off the window.
+                const sorted = [...employee.events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+                const isFile = (e) => (e.event_type || '').startsWith('file_') || (e.event_type || '').startsWith('folder_');
+                const files = sorted.filter(isFile);
+                const others = sorted.filter((e) => !isFile(e));
+                const list = [...files.slice(0, 8), ...others.slice(0, 12)]
+                  .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+                return list.map((evt, i) => {
+                  const dotColor =
+                    evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
+                    evt.event_type === 'file_create' || evt.event_type === 'folder_create' || evt.event_type === 'file_copy' ? 'bg-cyber-accent' :
+                    evt.event_type === 'file_delete' || evt.event_type === 'folder_delete' ? 'bg-cyber-danger' :
+                    evt.event_type === 'file_modify' ? 'bg-cyber-warning' :
+                    evt.event_type === 'network_upload' ? 'bg-cyber-secondary' :
+                    evt.event_type === 'login' ? 'bg-cyber-success' : 'bg-cyber-muted';
+                  return (
+                    <div key={evt.id} className="flex gap-4">
+                      <div className="flex flex-col items-center">
+                        <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${dotColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]`}></div>
+                        {i < list.length - 1 && <div className="w-px flex-1 bg-cyber-border/60 my-1"></div>}
                       </div>
-                      <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
+                      <div className="pb-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-cyber-muted font-mono">
+                            {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
+                            {evt.event_type.replace('_', ' ')}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
               {employee.events.length === 0 && (
                 <div className="text-cyber-muted text-xs font-mono py-6 text-center">NO TELEMETRY TO TIMELINE</div>
               )}

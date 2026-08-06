@@ -44,6 +44,11 @@ database/*.sqlite3
 *.sqlite
 *.sqlite3
 
+# Endpoint agent local identity (machine-specific — never commit or copy
+# to another PC, or the agent would connect as the wrong employee)
+threatvista-agent-config.json
+threatvista-agent-device.json
+
 # IDEs & System
 .vscode/
 .idea/
