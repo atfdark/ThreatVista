@@ -42,7 +42,7 @@ echo.
 
 echo   [1/2] Installing agent dependencies...
 python -m pip install --quiet --upgrade pip
-python -m pip install --quiet requests watchdog psutil pywin32 wmi
+python -m pip install --quiet requests watchdog psutil pywin32
 if errorlevel 1 (
     echo.
     echo   [!] Dependency install failed. Check your internet connection.
