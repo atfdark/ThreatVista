@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ShieldCheck, Lock, User, Mail, UserPlus, LogIn, AlertCircle, Info
+  ShieldCheck, Lock, User, Mail, UserPlus, LogIn, AlertCircle
 } from 'lucide-react';
 import { api } from '../services/mockData';
 
@@ -184,17 +184,6 @@ export default function Login() {
             >
               {loading ? 'AUTHENTICATING...' : 'ACCESS CONTROL CENTER'}
             </button>
-
-            {/* SOC Demo Credentials */}
-            <div className="p-3.5 bg-cyber-border/30 border border-cyber-border/50 rounded-lg flex gap-3 text-cyber-muted">
-              <Info className="h-4.5 w-4.5 text-cyber-secondary shrink-0 mt-0.5" />
-              <div className="text-[11px] font-mono leading-relaxed">
-                <span className="text-cyber-text font-semibold">SOC Demo Accounts:</span>
-                <div className="mt-1">Administrator: <span className="text-cyber-primary">admin / admin123</span></div>
-                <div>Security Analyst: <span className="text-cyber-primary">analyst / analyst123</span></div>
-                <div>Read-Only Auditor: <span className="text-cyber-primary">auditor / auditor123</span></div>
-              </div>
-            </div>
           </form>
         )}
 

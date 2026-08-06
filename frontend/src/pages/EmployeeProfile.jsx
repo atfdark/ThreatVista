@@ -248,6 +248,142 @@ export default function EmployeeProfile() {
             );
           })}
         </div>
+        {/* EDR: Behavior Timeline + Activity Explorer */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Behavior timeline */}
+          <div className="lg:col-span-2 p-6 glass-panel">
+            <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-5 flex items-center gap-2">
+              <Activity className="h-4.5 w-4.5 text-cyber-primary" /> Behavior Timeline
+            </h4>
+            <div className="space-y-0">
+              {employee.events.slice(0, 12).map((evt, i) => {
+                const dotColor =
+                  evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
+                  evt.event_type === 'file_copy' || evt.event_type === 'file_create' ? 'bg-cyber-accent' :
+                  evt.event_type === 'file_delete' ? 'bg-cyber-danger' :
+                  evt.event_type === 'network_upload' ? 'bg-cyber-secondary' :
+                  evt.event_type === 'login' ? 'bg-cyber-success' : 'bg-cyber-muted';
+                return (
+                  <div key={evt.id} className="flex gap-4">
+                    <div className="flex flex-col items-center">
+                      <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${dotColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]`}></div>
+                      {i < Math.min(employee.events.length, 12) - 1 && <div className="w-px flex-1 bg-cyber-border/60 my-1"></div>}
+                    </div>
+                    <div className="pb-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-cyber-muted font-mono">
+                          {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
+                          {evt.event_type.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
+                    </div>
+                  </div>
+                );
+              })}
+              {employee.events.length === 0 && (
+                <div className="text-cyber-muted text-xs font-mono py-6 text-center">NO TELEMETRY TO TIMELINE</div>
+              )}
+            </div>
+          </div>
+
+          {/* Activity category explorer + remote commands */}
+          <div className="space-y-6">
+            <div className="p-6 glass-panel">
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4">Activity Explorer</h4>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {[
+                  { key: 'all', label: 'All' },
+                  { key: 'usb', label: 'USB' },
+                  { key: 'process', label: 'Processes' },
+                  { key: 'files', label: 'Files' },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActivityTab(tab.key)}
+                    className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase border transition-colors ${
+                      activityTab === tab.key
+                        ? 'bg-cyber-primary text-cyber-bg border-cyber-primary'
+                        : 'text-cyber-muted border-cyber-border hover:text-cyber-text'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                {employee.events
+                  .filter(evt => {
+                    if (activityTab === 'usb') return evt.event_type.includes('usb');
+                    if (activityTab === 'process') return evt.event_type.includes('process');
+                    if (activityTab === 'files') return evt.event_type.includes('file');
+                    return true;
+                  })
+                  .slice(0, 20)
+                  .map(evt => (
+                    <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
+                      <span className="text-[10px] text-cyber-text">{evt.details || evt.event_type.replace('_', ' ')}</span>
+                      <span className="text-[9px] text-cyber-muted font-mono shrink-0">
+                        {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  ))}
+                {employee.events.filter(e => activityTab === 'all' || (activityTab === 'usb' && e.event_type.includes('usb')) || (activityTab === 'process' && e.event_type.includes('process')) || (activityTab === 'files' && e.event_type.includes('file'))).length === 0 && (
+                  <div className="text-cyber-muted text-xs font-mono text-center py-4">NO ACTIVITY IN THIS CATEGORY</div>
+                )}
+              </div>
+            </div>
+
+            {/* Remote commands (simulated) */}
+            <div className="p-6 glass-panel">
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-1 flex items-center gap-2">
+                <Monitor className="h-4.5 w-4.5 text-cyber-secondary" /> Remote Endpoint Commands
+              </h4>
+              <p className="text-[9px] text-cyber-muted font-mono mb-4">SIMULATED — NO MACHINE CONTROL</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { cmd: 'disable_usb', label: 'Disable USB', color: 'border-cyber-danger/35 text-cyber-danger bg-cyber-danger/10 hover:bg-cyber-danger hover:text-cyber-bg' },
+                  { cmd: 'restart_agent', label: 'Restart Agent', color: 'border-cyber-warning/35 text-cyber-warning bg-cyber-warning/10 hover:bg-cyber-warning hover:text-cyber-bg' },
+                  { cmd: 'collect_logs', label: 'Collect Logs', color: 'border-cyber-secondary/35 text-cyber-secondary bg-cyber-secondary/10 hover:bg-cyber-secondary hover:text-cyber-bg' },
+                  { cmd: 'refresh_config', label: 'Refresh Config', color: 'border-cyber-primary/35 text-cyber-primary bg-cyber-primary/10 hover:bg-cyber-primary hover:text-cyber-bg' },
+                ].map(btn => (
+                  <button
+                    key={btn.cmd}
+                    onClick={() => handleCommand(btn.cmd, btn.label)}
+                    className={`px-2 py-2 rounded border text-[10px] font-mono font-bold uppercase tracking-wide transition-colors ${btn.color}`}
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+
+              {commandMsg && (
+                <div className="mt-3 p-2.5 bg-cyber-success/10 border border-cyber-success/30 rounded text-[10px] text-cyber-success font-mono">
+                  {commandMsg}
+                </div>
+              )}
+              {commandErr && (
+                <div className="mt-3 p-2.5 bg-cyber-danger/10 border border-cyber-danger/30 rounded text-[10px] text-cyber-danger font-mono">
+                  {commandErr}
+                </div>
+              )}
+
+              {commands.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <span className="text-[9px] text-cyber-muted font-mono uppercase tracking-wider block">Command History</span>
+                  {commands.slice(0, 5).map(cmd => (
+                    <div key={cmd.id} className="flex justify-between items-center p-2 bg-cyber-bg/50 border border-cyber-border rounded text-[10px]">
+                      <span className="text-cyber-text font-mono">{cmd.label}</span>
+                      <span className="text-[9px] text-cyber-success font-mono">{cmd.status} · {RELATIVE_TIME(cmd.completed_at)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
         {/* Behavior DNA Profiling (Baseline) */}
         <div>
@@ -451,142 +587,6 @@ export default function EmployeeProfile() {
           </div>
         </div>
 
-        {/* EDR: Behavior Timeline + Activity Explorer */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Behavior timeline */}
-          <div className="lg:col-span-2 p-6 glass-panel">
-            <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-5 flex items-center gap-2">
-              <Activity className="h-4.5 w-4.5 text-cyber-primary" /> Behavior Timeline
-            </h4>
-            <div className="space-y-0">
-              {employee.events.slice(0, 12).map((evt, i) => {
-                const dotColor =
-                  evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
-                  evt.event_type === 'file_copy' || evt.event_type === 'file_create' ? 'bg-cyber-accent' :
-                  evt.event_type === 'file_delete' ? 'bg-cyber-danger' :
-                  evt.event_type === 'network_upload' ? 'bg-cyber-secondary' :
-                  evt.event_type === 'login' ? 'bg-cyber-success' : 'bg-cyber-muted';
-                return (
-                  <div key={evt.id} className="flex gap-4">
-                    <div className="flex flex-col items-center">
-                      <div className={`mt-1.5 h-2.5 w-2.5 rounded-full ${dotColor} shadow-[0_0_6px_rgba(0,0,0,0.5)]`}></div>
-                      {i < Math.min(employee.events.length, 12) - 1 && <div className="w-px flex-1 bg-cyber-border/60 my-1"></div>}
-                    </div>
-                    <div className="pb-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-cyber-muted font-mono">
-                          {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
-                          {evt.event_type.replace('_', ' ')}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-cyber-text leading-relaxed mt-1">{evt.details || 'No detail'}</p>
-                    </div>
-                  </div>
-                );
-              })}
-              {employee.events.length === 0 && (
-                <div className="text-cyber-muted text-xs font-mono py-6 text-center">NO TELEMETRY TO TIMELINE</div>
-              )}
-            </div>
-          </div>
-
-          {/* Activity category explorer + remote commands */}
-          <div className="space-y-6">
-            <div className="p-6 glass-panel">
-              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-4">Activity Explorer</h4>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {[
-                  { key: 'all', label: 'All' },
-                  { key: 'usb', label: 'USB' },
-                  { key: 'process', label: 'Processes' },
-                  { key: 'files', label: 'Files' },
-                ].map(tab => (
-                  <button
-                    key={tab.key}
-                    onClick={() => setActivityTab(tab.key)}
-                    className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold uppercase border transition-colors ${
-                      activityTab === tab.key
-                        ? 'bg-cyber-primary text-cyber-bg border-cyber-primary'
-                        : 'text-cyber-muted border-cyber-border hover:text-cyber-text'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
-                {employee.events
-                  .filter(evt => {
-                    if (activityTab === 'usb') return evt.event_type.includes('usb');
-                    if (activityTab === 'process') return evt.event_type.includes('process');
-                    if (activityTab === 'files') return evt.event_type.includes('file');
-                    return true;
-                  })
-                  .slice(0, 20)
-                  .map(evt => (
-                    <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
-                      <span className="text-[10px] text-cyber-text">{evt.details || evt.event_type.replace('_', ' ')}</span>
-                      <span className="text-[9px] text-cyber-muted font-mono shrink-0">
-                        {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                  ))}
-                {employee.events.filter(e => activityTab === 'all' || (activityTab === 'usb' && e.event_type.includes('usb')) || (activityTab === 'process' && e.event_type.includes('process')) || (activityTab === 'files' && e.event_type.includes('file'))).length === 0 && (
-                  <div className="text-cyber-muted text-xs font-mono text-center py-4">NO ACTIVITY IN THIS CATEGORY</div>
-                )}
-              </div>
-            </div>
-
-            {/* Remote commands (simulated) */}
-            <div className="p-6 glass-panel">
-              <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-1 flex items-center gap-2">
-                <Monitor className="h-4.5 w-4.5 text-cyber-secondary" /> Remote Endpoint Commands
-              </h4>
-              <p className="text-[9px] text-cyber-muted font-mono mb-4">SIMULATED — NO MACHINE CONTROL</p>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { cmd: 'disable_usb', label: 'Disable USB', color: 'border-cyber-danger/35 text-cyber-danger bg-cyber-danger/10 hover:bg-cyber-danger hover:text-cyber-bg' },
-                  { cmd: 'restart_agent', label: 'Restart Agent', color: 'border-cyber-warning/35 text-cyber-warning bg-cyber-warning/10 hover:bg-cyber-warning hover:text-cyber-bg' },
-                  { cmd: 'collect_logs', label: 'Collect Logs', color: 'border-cyber-secondary/35 text-cyber-secondary bg-cyber-secondary/10 hover:bg-cyber-secondary hover:text-cyber-bg' },
-                  { cmd: 'refresh_config', label: 'Refresh Config', color: 'border-cyber-primary/35 text-cyber-primary bg-cyber-primary/10 hover:bg-cyber-primary hover:text-cyber-bg' },
-                ].map(btn => (
-                  <button
-                    key={btn.cmd}
-                    onClick={() => handleCommand(btn.cmd, btn.label)}
-                    className={`px-2 py-2 rounded border text-[10px] font-mono font-bold uppercase tracking-wide transition-colors ${btn.color}`}
-                  >
-                    {btn.label}
-                  </button>
-                ))}
-              </div>
-
-              {commandMsg && (
-                <div className="mt-3 p-2.5 bg-cyber-success/10 border border-cyber-success/30 rounded text-[10px] text-cyber-success font-mono">
-                  {commandMsg}
-                </div>
-              )}
-              {commandErr && (
-                <div className="mt-3 p-2.5 bg-cyber-danger/10 border border-cyber-danger/30 rounded text-[10px] text-cyber-danger font-mono">
-                  {commandErr}
-                </div>
-              )}
-
-              {commands.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  <span className="text-[9px] text-cyber-muted font-mono uppercase tracking-wider block">Command History</span>
-                  {commands.slice(0, 5).map(cmd => (
-                    <div key={cmd.id} className="flex justify-between items-center p-2 bg-cyber-bg/50 border border-cyber-border rounded text-[10px]">
-                      <span className="text-cyber-text font-mono">{cmd.label}</span>
-                      <span className="text-[9px] text-cyber-success font-mono">{cmd.status} · {RELATIVE_TIME(cmd.completed_at)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       </div>
     );
   }
