@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
+import { formatIST, toISTDate } from '../utils/time';
 
 export default function EmployeeProfile() {
   const { id } = useParams();
@@ -55,7 +56,7 @@ export default function EmployeeProfile() {
 
   const RELATIVE_TIME = (iso) => {
     if (!iso) return 'never';
-    const diff = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    const diff = Math.max(0, (Date.now() - (toISTDate(iso)?.getTime() ?? 0)) / 1000);
     if (diff < 5) return 'just now';
     if (diff < 60) return `${Math.floor(diff)}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -117,7 +118,7 @@ export default function EmployeeProfile() {
     
     // Format chart date
     const chartData = (employee.risk_scores || []).map(score => ({
-      date: new Date(score.recorded_at).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+      date: formatIST(score.recorded_at, { month: 'short', day: 'numeric' }),
       score: score.score
     }));
 
@@ -272,7 +273,7 @@ export default function EmployeeProfile() {
                     <div className="pb-4">
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-cyber-muted font-mono">
-                          {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </span>
                         <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase bg-cyber-bg/60 border-cyber-border">
                           {evt.event_type.replace('_', ' ')}
@@ -326,7 +327,7 @@ export default function EmployeeProfile() {
                     <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
                       <span className="text-[10px] text-cyber-text">{evt.details || evt.event_type.replace('_', ' ')}</span>
                       <span className="text-[9px] text-cyber-muted font-mono shrink-0">
-                        {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {formatIST(evt.timestamp, { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   ))}
@@ -547,7 +548,7 @@ export default function EmployeeProfile() {
                       </td>
                       <td className="py-2.5 text-xs text-cyber-text">{evt.details}</td>
                       <td className="py-2.5 text-right pr-3 text-cyber-muted text-[10px]">
-                        {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </td>
                     </tr>
                   ))}
@@ -578,7 +579,7 @@ export default function EmployeeProfile() {
                     </div>
                     <p className="text-[11px] text-cyber-text leading-relaxed">{alert.reason}</p>
                     <p className="text-[9px] text-cyber-muted font-mono">
-                      {new Date(alert.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {formatIST(alert.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                   </div>
                 ))

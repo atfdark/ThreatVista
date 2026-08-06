@@ -3,6 +3,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { UserCheck } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
 import { useWebSocket } from '../services/websocket';
+import { formatIST } from '../utils/time';
 
 export default function MainLayout() {
   const navigate = useNavigate();
@@ -55,7 +56,7 @@ export default function MainLayout() {
               <div className="text-sm font-bold text-cyber-text truncate">{toast.username}</div>
               <div className="text-[10px] font-mono text-cyber-muted mt-0.5">
                 {toast.role} · {toast.ip || 'unknown IP'} ·{' '}
-                {toast.at ? new Date(toast.at).toLocaleTimeString() : ''}
+                {toast.at ? formatIST(toast.at, { hour: '2-digit', minute: '2-digit' }) : ''}
               </div>
             </div>
           </div>

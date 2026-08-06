@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, LogOut, User, Mail, BadgeCheck, Activity } from 'lucide-react';
 import { api } from '../services/mockData';
+import { IST_TIME_ZONE } from '../utils/time';
 
 export default function MyProfile() {
   const navigate = useNavigate();
@@ -83,7 +84,7 @@ export default function MyProfile() {
             <User className="h-4 w-4 text-cyber-accent shrink-0" />
             <div>
               <div className="text-[9px] font-mono uppercase text-cyber-muted tracking-wider">Signed in at</div>
-              <div className="text-sm text-cyber-text font-mono">{now.toLocaleTimeString()}</div>
+              <div className="text-sm text-cyber-text font-mono">{now.toLocaleTimeString([], { timeZone: IST_TIME_ZONE })}</div>
             </div>
           </div>
         </div>

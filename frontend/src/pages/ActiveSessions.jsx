@@ -4,10 +4,11 @@ import {
 } from 'lucide-react';
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
+import { formatIST, toISTDate } from '../utils/time';
 
 function relativeTime(iso) {
   if (!iso) return 'never';
-  const diff = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  const diff = Math.max(0, (Date.now() - (toISTDate(iso)?.getTime() ?? 0)) / 1000);
   if (diff < 5) return 'just now';
   if (diff < 60) return `${Math.floor(diff)}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -279,7 +280,7 @@ export default function ActiveSessions() {
                     <td className="py-2.5 pl-5 text-cyber-muted text-[10px] whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <Clock className="h-3.5 w-3.5 text-cyber-muted" />
-                        {evt.timestamp ? new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
+                        {evt.timestamp ? formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}
                       </div>
                     </td>
                     <td className="py-2.5 text-cyber-text whitespace-nowrap">

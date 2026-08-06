@@ -1,34 +1,65 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Users, 
-  AlertTriangle, 
-  Activity, 
-  TrendingUp, 
-  ShieldAlert, 
+import {
+  Users,
+  AlertTriangle,
+  TrendingUp,
+  ShieldAlert,
   ChevronRight,
   ArrowRight,
-  Database,
   Radio
 } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
+import { formatIST, formatISTClock, toISTDate } from '../utils/time';
+
+const LIVE_WINDOW_MINUTES = 15;
+
+// Bucket live events into the last LIVE_WINDOW_MINUTES minutes (one bucket per
+// minute, newest on the right). Counts events per type so the dashboard chart
+// mirrors the real-time agent feed instead of the old static 7-day summary.
+function buildLiveSeries(events, now = Date.now()) {
+  const buckets = [];
+  for (let i = LIVE_WINDOW_MINUTES - 1; i >= 0; i--) {
+    buckets.push({
+      name: formatISTClock(new Date(now - i * 60_000), { hour: '2-digit', minute: '2-digit' }),
+      usb: 0,
+      network: 0,
+      files: 0,
+      total: 0,
+    });
+  }
+  for (const evt of events || []) {
+    if (!evt?.timestamp) continue;
+    const minutesAgo = Math.floor((now - (toISTDate(evt.timestamp)?.getTime() ?? 0)) / 60_000);
+    if (minutesAgo < 0 || minutesAgo >= LIVE_WINDOW_MINUTES) continue;
+    const bucket = buckets[LIVE_WINDOW_MINUTES - 1 - minutesAgo];
+    bucket.total += 1;
+    if (evt.event_type === 'usb_insert') bucket.usb += 1;
+    else if (evt.event_type === 'file_copy') bucket.files += 1;
+    else if (evt.event_type === 'network_upload') bucket.network += 1;
+  }
+  return buckets;
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [alerts, setAlerts] = useState([]);
-  const [analytics, setAnalytics] = useState(null);
   const [recentEvents, setRecentEvents] = useState([]);
+  const [liveEvents, setLiveEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   const [aiScores, setAiScores] = useState({});
+  // Forces the live chart's sliding window to advance even during quiet periods.
+  const [, setClock] = useState(() => Date.now());
 
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
       setRecentEvents(prev => [message.data, ...prev].slice(0, 10));
+      setLiveEvents(prev => [message.data, ...prev].slice(0, 200));
     } else if (message.type === 'new_alert') {
       setAlerts(prev => [message.data, ...prev].slice(0, 3));
     }
@@ -59,14 +90,13 @@ export default function Dashboard() {
         const statsData = await api.getStats();
         const empsData = await api.getEmployees();
         const alertsData = await api.getAlerts();
-        const analyticsData = await api.getAnalytics();
-        const eventsData = await api.getEvents(null, 10);
+        const eventsData = await api.getEvents(null, 50);
 
         setStats(statsData);
         setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
         setAlerts(alertsData.slice(0, 3));
-        setAnalytics(analyticsData);
-        setRecentEvents(eventsData || []);
+        setRecentEvents((eventsData || []).slice(0, 10));
+        setLiveEvents(eventsData || []);
       } catch (err) {
         console.error("Failed to load dashboard data", err);
       } finally {
@@ -82,21 +112,28 @@ export default function Dashboard() {
   useEffect(() => {
     async function refresh() {
       try {
-        const [statsData, empsData, alertsData, analyticsData] = await Promise.all([
+        const [statsData, empsData, alertsData, eventsData] = await Promise.all([
           api.getStats(),
           api.getEmployees(),
           api.getAlerts(),
-          api.getAnalytics(),
+          api.getEvents(null, 50),
         ]);
         setStats(statsData);
         setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
         setAlerts(alertsData.slice(0, 3));
-        setAnalytics(analyticsData);
+        setLiveEvents(eventsData || []);
       } catch (err) {
         console.error("Failed to refresh dashboard", err);
       }
     }
     const t = setInterval(refresh, 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Slide the live chart's time window forward every 30s so buckets age out and
+  // the axis keeps flowing even when no telemetry is arriving.
+  useEffect(() => {
+    const t = setInterval(() => setClock(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
 
@@ -117,6 +154,8 @@ export default function Dashboard() {
   const averageRisk = stats?.average_risk || 18;
   const onlineEmployees = stats?.online_employees ?? 0;
   const offlineEmployees = stats?.offline_employees ?? 0;
+
+  const liveSeries = buildLiveSeries(liveEvents);
 
   const statCards = [
     { label: 'Total Employees', value: totalEmployees, sub: 'Active Monitoring', icon: Users, color: 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' },
@@ -163,23 +202,26 @@ export default function Dashboard() {
         <div className="lg:col-span-2 p-6 glass-panel flex flex-col">
           <div className="flex justify-between items-center mb-6">
             <div>
-              <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Anomalous Telemetry Volume</h4>
-              <p className="text-xs text-cyber-muted">Daily USB connections, network uploads (MB) and file edits</p>
+              <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Live Telemetry Stream</h4>
+              <p className="text-xs text-cyber-muted">Per-minute event volume from the live agent feed</p>
             </div>
-            <span className="text-[10px] bg-cyber-primary/10 border border-cyber-primary/20 text-cyber-primary px-2.5 py-1 rounded font-mono">7-DAY SUMMARY</span>
+            <span className="flex items-center gap-1.5 text-[10px] bg-cyber-danger/10 border border-cyber-danger/25 text-cyber-danger px-2.5 py-1 rounded font-mono font-bold">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-cyber-danger animate-pulse"></span>
+              LIVE · LAST {LIVE_WINDOW_MINUTES} MIN
+            </span>
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={analytics?.device_activity || []}>
+              <BarChart data={liveSeries}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
-                <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} />
-                <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
-                <Tooltip 
+                <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} minTickGap={24} />
+                <YAxis stroke="#64748b" fontSize={11} tickLine={false} allowDecimals={false} />
+                <Tooltip
                   contentStyle={{ backgroundColor: '#0f1626', borderColor: '#1e293b', borderRadius: 8, fontSize: 11 }}
                   itemStyle={{ color: '#f8fafc' }}
                 />
                 <Bar dataKey="usb" fill="#06b6d4" name="USB Inserts" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="network" fill="#3b82f6" name="Upload Vol (MB)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="network" fill="#3b82f6" name="Network Uploads" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="files" fill="#a855f7" name="Files Copied" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -207,7 +249,7 @@ export default function Dashboard() {
                   </div>
                   <p className="text-[11px] text-cyber-muted line-clamp-2 leading-relaxed">{alert.reason}</p>
                   <p className="text-[9px] text-cyber-muted font-mono pt-1">
-                    {new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {formatIST(alert.timestamp, { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
               ))}
@@ -333,7 +375,7 @@ export default function Dashboard() {
                   </td>
                   <td className="py-2.5 text-xs text-cyber-text">{evt.details || '-'}</td>
                   <td className="py-2.5 text-right pr-3 text-cyber-muted text-[10px]">
-                    {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </td>
                 </tr>
               ))}

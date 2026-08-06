@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
+import { formatIST } from '../utils/time';
 
 export default function Alerts() {
   const navigate = useNavigate();
@@ -191,7 +192,7 @@ export default function Alerts() {
                   <td className="py-4 pl-4 text-cyber-muted whitespace-nowrap text-[10px]">
                     <div className="flex items-center gap-1.5">
                       <Clock className="h-3.5 w-3.5 text-cyber-muted" />
-                      {new Date(alert.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {formatIST(alert.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </td>
                   <td className="py-4 font-semibold text-cyber-text whitespace-nowrap">

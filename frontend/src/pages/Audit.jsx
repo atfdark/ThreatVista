@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ScrollText, RefreshCw, Search } from 'lucide-react';
 import { api } from '../services/mockData';
+import { formatIST } from '../utils/time';
 
 const ACTIONS = [
   'All',
@@ -16,7 +17,7 @@ const ACTIONS = [
 
 function fmtDate(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return formatIST(iso, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export default function Audit() {
