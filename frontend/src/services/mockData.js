@@ -28,221 +28,70 @@ http.interceptors.response.use(
   }
 );
 
-export const MOCK_STATS = {
-  total_employees: 156,
-  high_risk: 2,
-  active_alerts: 6,
-  average_risk: 18
+// ---------------------------------------------------------------------------
+// Neutral empty defaults used when the backend is unreachable.
+//
+// The UI shows ONLY real data from the backend. When an API call fails these
+// placeholders are returned so pages render their empty states instead of
+// fabricating demo employees/alerts/incidents/endpoints.
+// ---------------------------------------------------------------------------
+
+const EMPTY_STATS = {
+  total_employees: 0,
+  high_risk: 0,
+  active_alerts: 0,
+  average_risk: 0
 };
 
-export const MOCK_EMPLOYEES = [
-  { id: 1, name: "Rahul Sharma", email: "rahul.sharma@threatvista.com", department: "Engineering", risk_score: 92, status: "High Risk", photo_url: null },
-  { id: 2, name: "Amit Verma", email: "amit.verma@threatvista.com", department: "Sales", risk_score: 63, status: "Suspicious", photo_url: null },
-  { id: 3, name: "Priya Patel", email: "priya.patel@threatvista.com", department: "Human Resources", risk_score: 15, status: "Normal", photo_url: null },
-  { id: 4, name: "Ananya Rao", email: "ananya.rao@threatvista.com", department: "Finance", risk_score: 28, status: "Normal", photo_url: null },
-  { id: 5, name: "Vikram Singh", email: "vikram.singh@threatvista.com", department: "Marketing", risk_score: 41, status: "Normal", photo_url: null }
-];
-
-export const MOCK_ALERTS = [
-  {
-    id: 1,
-    severity: "High",
-    reason: "Correlation: Mass file copying of patent data (120 files) following external network upload (1.2GB) and USB insertion.",
-    status: "Active",
-    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    employee: { id: 1, name: "Rahul Sharma", email: "rahul.sharma@threatvista.com", department: "Engineering", risk_score: 92, status: "High Risk" }
-  },
-  {
-    id: 2,
-    severity: "Medium",
-    reason: "Unusual network upload volume (1.2 GB, baseline: 15 MB/day)",
-    status: "Active",
-    timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-    employee: { id: 1, name: "Rahul Sharma", email: "rahul.sharma@threatvista.com", department: "Engineering", risk_score: 92, status: "High Risk" }
-  },
-  {
-    id: 3,
-    severity: "High",
-    reason: "Late night login at 02:45 AM followed by access to restricted sales and employee contact spreadsheets.",
-    status: "Investigating",
-    timestamp: new Date(Date.now() - 17.5 * 60 * 60 * 1000).toISOString(),
-    employee: { id: 2, name: "Amit Verma", email: "amit.verma@threatvista.com", department: "Sales", risk_score: 63, status: "Suspicious" }
-  },
-  {
-    id: 4,
-    severity: "Low",
-    reason: "Unusual process spawned: cmd.exe executed file attribute edits.",
-    status: "Resolved",
-    timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    employee: { id: 1, name: "Rahul Sharma", email: "rahul.sharma@threatvista.com", department: "Engineering", risk_score: 92, status: "High Risk" }
-  }
-];
-
-export const MOCK_INCIDENTS = [
-  {
-    id: 1,
-    employee_id: 1,
-    employee: { id: 1, name: "Rahul Sharma" },
-    title: "Mass File Activity (150 events)",
-    severity: "High",
-    status: "ACTIVE",
-    risk_score: 72,
-    confidence: 88,
-    created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    updated_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-    resolved_at: null,
-    resolved_by: null,
-    resolution_reason: null,
-    active: true,
-    timeline: [
-      { ts: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), type: "created", title: "Incident created", detail: "Mass File Activity (150 events)" },
-      { ts: new Date(Date.now() - 90 * 60 * 1000).toISOString(), type: "evidence", title: "Mass File Activity (150 events)", detail: "150 file_create events in a burst" },
-      { ts: new Date(Date.now() - 60 * 60 * 1000).toISOString(), type: "risk_increase", title: "Risk increased: 65 → 72", detail: "" }
-    ]
-  },
-  {
-    id: 2,
-    employee_id: 2,
-    employee: { id: 2, name: "Amit Verma" },
-    title: "Unusual Network Upload",
-    severity: "Medium",
-    status: "RESOLVED",
-    risk_score: 63,
-    confidence: 74,
-    created_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
-    updated_at: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-    resolved_at: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
-    resolved_by: "admin",
-    resolution_reason: "False Positive",
-    active: false,
-    timeline: [
-      { ts: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(), type: "created", title: "Incident created", detail: "Unusual Network Upload" },
-      { ts: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(), type: "resolved", title: "Incident resolved by admin", detail: "False Positive" }
-    ]
-  }
-];
-
-export const MOCK_EMPLOYEE_DETAILS = {
-  1: {
-    id: 1,
-    name: "Rahul Sharma",
-    email: "rahul.sharma@threatvista.com",
-    department: "Engineering",
-    risk_score: 92,
-    status: "High Risk",
-    photo_url: null,
-    behavior_profile: {
-      working_hours_baseline: "09:00 - 18:00",
-      avg_usb_inserts_per_day: 0.2,
-      avg_file_copies_per_day: 4.5,
-      avg_upload_mb_per_day: 15.0
-    },
-    events: [
-      { id: 101, event_type: "file_copy", details: "Copied 120 files containing keyword 'patent_design' to USB", timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
-      { id: 102, event_type: "usb_insert", details: "Mass Storage Device (Kingston 64GB) connected", timestamp: new Date(Date.now() - 2.5 * 60 * 60 * 1000).toISOString() },
-      { id: 103, event_type: "network_upload", details: "Uploaded 1.2 GB of ZIP data to unknown external IP", timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString() },
-      { id: 104, event_type: "process_start", details: "Ran cmd.exe to edit file attributes", timestamp: new Date(Date.now() - 4.5 * 60 * 60 * 1000).toISOString() }
-    ],
-    alerts: [
-      { id: 1, severity: "High", reason: "Correlation: Mass file copying of patent data (120 files) following external network upload (1.2GB) and USB insertion.", status: "Active", timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
-      { id: 2, severity: "Medium", reason: "Unusual network upload volume (1.2 GB, baseline: 15 MB/day)", status: "Active", timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString() }
-    ],
-    risk_scores: [
-      { score: 40, recorded_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 48, recorded_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 56, recorded_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 64, recorded_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 72, recorded_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 85, recorded_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 92, recorded_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() }
-    ]
-  },
-  2: {
-    id: 2,
-    name: "Amit Verma",
-    email: "amit.verma@threatvista.com",
-    department: "Sales",
-    risk_score: 63,
-    status: "Suspicious",
-    photo_url: null,
-    behavior_profile: {
-      working_hours_baseline: "10:00 - 19:00",
-      avg_usb_inserts_per_day: 0.5,
-      avg_file_copies_per_day: 12.2,
-      avg_upload_mb_per_day: 45.0
-    },
-    events: [
-      { id: 201, event_type: "login", details: "System access detected at 02:45 AM (Out-of-office hours)", timestamp: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString() },
-      { id: 202, event_type: "file_access", details: "Accessed employee_contacts_confidential.xlsx", timestamp: new Date(Date.now() - 17.5 * 60 * 60 * 1000).toISOString() },
-      { id: 203, event_type: "usb_insert", details: "Unrecognized USB Device (Generic Flash) connected", timestamp: new Date(Date.now() - 17.2 * 60 * 60 * 1000).toISOString() }
-    ],
-    alerts: [
-      { id: 3, severity: "High", reason: "Late night login at 02:45 AM followed by access to restricted sales and employee contact spreadsheets.", status: "Investigating", timestamp: new Date(Date.now() - 17.5 * 60 * 60 * 1000).toISOString() }
-    ],
-    risk_scores: [
-      { score: 55, recorded_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 59, recorded_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 55, recorded_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 59, recorded_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 55, recorded_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 60, recorded_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 63, recorded_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() }
-    ]
-  },
-  3: {
-    id: 3,
-    name: "Priya Patel",
-    email: "priya.patel@threatvista.com",
-    department: "Human Resources",
-    risk_score: 15,
-    status: "Normal",
-    photo_url: null,
-    behavior_profile: {
-      working_hours_baseline: "09:00 - 17:30",
-      avg_usb_inserts_per_day: 0.05,
-      avg_file_copies_per_day: 2.0,
-      avg_upload_mb_per_day: 5.0
-    },
-    events: [
-      { id: 301, event_type: "file_access", details: "Modified performance_evaluation_Q2.docx", timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString() },
-      { id: 302, event_type: "login", details: "Logged in at 09:02 AM", timestamp: new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString() }
-    ],
-    alerts: [],
-    risk_scores: [
-      { score: 12, recorded_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 15, recorded_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 12, recorded_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 15, recorded_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 12, recorded_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 15, recorded_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() },
-      { score: 15, recorded_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() }
-    ]
-  }
+const EMPTY_ANALYTICS = {
+  summary: EMPTY_STATS,
+  risk_distribution: [],
+  severity_distribution: [],
+  device_activity: []
 };
 
-export const MOCK_ANALYTICS = {
-  summary: MOCK_STATS,
-  risk_distribution: [
-    { range: "Low (0-30)", count: 120 },
-    { range: "Medium (31-60)", count: 28 },
-    { range: "High (61-80)", count: 6 },
-    { range: "Critical (81-100)", count: 2 }
-  ],
-  severity_distribution: [
-    { severity: "High", count: 2 },
-    { severity: "Medium", count: 3 },
-    { severity: "Low", count: 1 }
-  ],
-  device_activity: [
-    { name: "Mon", usb: 4, network: 120, files: 400 },
-    { name: "Tue", usb: 8, network: 240, files: 820 },
-    { name: "Wed", usb: 15, network: 1800, files: 1950 },
-    { name: "Thu", usb: 5, network: 320, files: 610 },
-    { name: "Fri", usb: 3, network: 290, files: 530 }
-  ]
+// Safe placeholder for an employee whose profile could not load. No fake
+// events/alerts/risk history — just an empty shell so the page can render.
+const emptyEmployeeDetail = (id) => ({
+  id,
+  name: "Unknown Employee",
+  email: "unknown@threatvista.com",
+  department: "Unknown",
+  risk_score: 0,
+  status: "Normal",
+  photo_url: null,
+  behavior_profile: {
+    working_hours_baseline: "09:00 - 17:00",
+    avg_usb_inserts_per_day: 0,
+    avg_file_copies_per_day: 0,
+    avg_upload_mb_per_day: 0
+  },
+  events: [],
+  alerts: [],
+  risk_scores: []
+});
+
+const EMPTY_INCIDENT = {
+  id: 0,
+  employee_id: null,
+  employee: null,
+  title: "Unknown Incident",
+  severity: "Medium",
+  status: "CLOSED",
+  risk_score: 0,
+  confidence: 0,
+  created_at: null,
+  updated_at: null,
+  resolved_at: null,
+  resolved_by: null,
+  resolution_reason: null,
+  active: false,
+  timeline: []
 };
 
-export const MOCK_SETTINGS = {
+// Config thresholds the Settings page needs to render its form. These are
+// defaults (same shape the backend returns), not fabricated records.
+const DEFAULT_SETTINGS = {
   high_risk_threshold: 75,
   suspicious_threshold: 50,
   dna_window_days: 14,
@@ -252,63 +101,6 @@ export const MOCK_SETTINGS = {
   monitor_network: true,
   monitor_processes: true
 };
-
-export const MOCK_ENDPOINTS = [
-  {
-    employee: { ...MOCK_EMPLOYEES[0] },
-    device: {
-      device_id: 'DEV-0001',
-      hostname: 'RAHUL-PC',
-      os_version: 'Windows 10',
-      cpu_cores: 8,
-      ram_gb: 16,
-      ip_address: '192.168.1.102',
-      agent_version: '1.0.0',
-      online: true,
-      last_seen_at: new Date(Date.now() - 3000).toISOString(),
-      last_cpu_usage: 15,
-      last_ram_usage: 42,
-      last_disk_usage: 63
-    },
-    recent_event_count: 12
-  },
-  {
-    employee: { ...MOCK_EMPLOYEES[2] },
-    device: {
-      device_id: 'DEV-0003',
-      hostname: 'PRIYA-PC',
-      os_version: 'Windows 11',
-      cpu_cores: 8,
-      ram_gb: 32,
-      ip_address: '192.168.1.105',
-      agent_version: '1.0.0',
-      online: true,
-      last_seen_at: new Date(Date.now() - 8000).toISOString(),
-      last_cpu_usage: 8,
-      last_ram_usage: 31,
-      last_disk_usage: 48
-    },
-    recent_event_count: 3
-  },
-  {
-    employee: { ...MOCK_EMPLOYEES[1] },
-    device: {
-      device_id: 'DEV-0002',
-      hostname: 'AMIT-PC',
-      os_version: 'Windows 10',
-      cpu_cores: 4,
-      ram_gb: 8,
-      ip_address: '192.168.1.104',
-      agent_version: '1.0.0',
-      online: false,
-      last_seen_at: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-      last_cpu_usage: null,
-      last_ram_usage: null,
-      last_disk_usage: null
-    },
-    recent_event_count: 0
-  }
-];
 
 export const api = {
   isBackendConnected: async () => {
@@ -325,7 +117,7 @@ export const api = {
       const res = await http.get(`/dashboard`);
       return res.data;
     } catch {
-      return MOCK_STATS;
+      return EMPTY_STATS;
     }
   },
 
@@ -334,7 +126,7 @@ export const api = {
       const res = await http.get(`/employees`);
       return res.data;
     } catch {
-      return MOCK_EMPLOYEES;
+      return [];
     }
   },
 
@@ -343,19 +135,7 @@ export const api = {
       const res = await http.get(`/employees/${id}`);
       return res.data;
     } catch {
-      return MOCK_EMPLOYEE_DETAILS[id] || {
-        id,
-        name: "Unknown Employee",
-        email: "unknown@threatvista.com",
-        department: "Unknown",
-        risk_score: 0,
-        status: "Normal",
-        photo_url: null,
-        behavior_profile: { working_hours_baseline: "09:00 - 17:00", avg_usb_inserts_per_day: 0, avg_file_copies_per_day: 0, avg_upload_mb_per_day: 0 },
-        events: [],
-        alerts: [],
-        risk_scores: []
-      };
+      return emptyEmployeeDetail(id);
     }
   },
 
@@ -364,7 +144,7 @@ export const api = {
       const res = await http.get(`/alerts`);
       return res.data;
     } catch {
-      return MOCK_ALERTS;
+      return [];
     }
   },
 
@@ -372,13 +152,14 @@ export const api = {
     try {
       const res = await http.get(`/dashboard`);
       return {
-        ...MOCK_ANALYTICS,
+        ...EMPTY_ANALYTICS,
         summary: res.data.summary || res.data,
-        risk_distribution: res.data.risk_distribution.length ? res.data.risk_distribution : MOCK_ANALYTICS.risk_distribution,
-        severity_distribution: res.data.severity_distribution.length ? res.data.severity_distribution : MOCK_ANALYTICS.severity_distribution
+        risk_distribution: res.data.risk_distribution || [],
+        severity_distribution: res.data.severity_distribution || [],
+        device_activity: res.data.device_activity || []
       };
     } catch {
-      return MOCK_ANALYTICS;
+      return EMPTY_ANALYTICS;
     }
   },
 
@@ -416,7 +197,7 @@ export const api = {
       const res = await http.get(`/settings`);
       return res.data;
     } catch {
-      return MOCK_SETTINGS;
+      return DEFAULT_SETTINGS;
     }
   },
 
@@ -437,7 +218,7 @@ export const api = {
       const res = await http.get(`/incidents`, { params });
       return res.data;
     } catch {
-      return MOCK_INCIDENTS;
+      return [];
     }
   },
 
@@ -446,7 +227,7 @@ export const api = {
       const res = await http.get(`/incidents/${incidentId}`);
       return res.data;
     } catch {
-      return MOCK_INCIDENTS.find((i) => i.id === incidentId) || MOCK_INCIDENTS[0];
+      return EMPTY_INCIDENT;
     }
   },
 
@@ -526,7 +307,7 @@ export const api = {
       const res = await http.get(`/endpoints`);
       return res.data;
     } catch {
-      return MOCK_ENDPOINTS;
+      return [];
     }
   },
 
@@ -565,22 +346,7 @@ export const api = {
       if (err.response && err.response.status === 429) {
         throw new Error(err.response.data?.detail || "Too many attempts. Try again later.");
       }
-      // Offline fallback so the demo can still be shown without a backend.
-      const OFFLINE_USERS = {
-        admin: { password: "admin123", role: "admin" },
-        analyst: { password: "analyst123", role: "analyst" },
-        auditor: { password: "auditor123", role: "auditor" },
-      };
-      const match = OFFLINE_USERS[username];
-      if (match && match.password === password) {
-        return {
-          access_token: `mock_jwt_token_threatvista_${username}`,
-          token_type: "bearer",
-          username: username,
-          role: match.role
-        };
-      }
-      throw new Error("Connection failed. Use admin / admin123 (or analyst / auditor accounts).");
+      throw new Error("Cannot reach the backend. Make sure the server is running, then try again.");
     }
   },
 

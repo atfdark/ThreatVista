@@ -96,7 +96,7 @@ export default function MyProfile() {
     } catch (err) {
       setEnrollMsg({
         type: 'error',
-        text: err?.response?.data?.detail || 'Could not enroll this device. Try again.',
+        text: err?.response?.data?.detail || 'Could not reach the server. Make sure the ThreatVista backend is running and you are logged in with your employee account.',
       });
     } finally {
       setEnrolling(false);
