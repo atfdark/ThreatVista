@@ -87,11 +87,22 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class RegisterRequest(BaseModel):
+    username: str       # email, e.g. john.doe@threatvista.com
+    password: str
+    name: str           # display name
+    department: Optional[str] = "General"
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     username: str
     role: str
+    name: Optional[str] = None
+
+# Shared dependency: SOC staff only. Employee accounts authenticate but must
+# not read SOC-wide data (other employees, alerts, settings, reports).
+soc_only = require_roles("admin", "analyst", "auditor")
 
 class EventCreate(BaseModel):
     employee_id: int
@@ -248,9 +259,14 @@ class CommandRequest(BaseModel):
     command: str  # one of ALLOWED_COMMANDS
 
 
+def _employee_name_for(db: Session, username: str) -> Optional[str]:
+    """Return the employee display name matching a login username/email, if any."""
+    emp = db.query(models.Employee).filter(models.Employee.email == username).first()
+    return emp.name if emp else None
+
 # Auth Login Endpoint
 @router.post("/auth/login", response_model=TokenResponse)
-def login(
+async def login(
     request: Request,
     payload: LoginRequest,
     db: Session = Depends(get_db),
@@ -276,11 +292,88 @@ def login(
     token, jti, expires_at = create_access_token(user)
     create_session(db, user, jti, expires_at, ip=ip)
     log_action(db, user, "login", "auth", resource_id=str(user.id), details="User login", ip=ip)
+
+    # Push the sign-in to every open SOC dashboard so the admin sees it live.
+    await manager.broadcast({
+        "type": "new_login",
+        "data": {
+            "username": user.username,
+            "role": user.role,
+            "ip": ip,
+            "at": datetime.utcnow().isoformat(),
+        },
+    })
+
     return {
         "access_token": token,
         "token_type": "bearer",
         "username": user.username,
-        "role": user.role
+        "role": user.role,
+        "name": _employee_name_for(db, user.username),
+    }
+
+
+@router.post("/auth/register", response_model=TokenResponse)
+async def register(
+    request: Request,
+    payload: RegisterRequest,
+    db: Session = Depends(get_db),
+):
+    """Self-registration for employees. Creates a `role="employee"` user (and a
+    matching Employee directory row if needed), then auto-logs-in.
+    """
+    ip = client_ip(request)
+    username = payload.username.strip().lower()
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if not username:
+        raise HTTPException(status_code=400, detail="Username/email is required")
+
+    if db.query(models.User).filter(models.User.username == username).first():
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+    user = models.User(
+        username=username,
+        password_hash=hash_password(payload.password),
+        role="employee",
+    )
+    db.add(user)
+
+    # Add to the employee directory so the person is visible/monitorable in SOC.
+    if db.query(models.Employee).filter(models.Employee.email == username).first() is None:
+        db.add(models.Employee(
+            name=payload.name,
+            email=username,
+            department=payload.department or "General",
+            risk_score=0,
+            status="Normal",
+        ))
+
+    db.commit()
+    db.refresh(user)
+    log_action(db, user, "register", "auth", resource_id=str(user.id),
+               details=f"Employee account created for '{username}'", ip=ip)
+
+    token, jti, expires_at = create_access_token(user)
+    create_session(db, user, jti, expires_at, ip=ip)
+    log_action(db, user, "login", "auth", resource_id=str(user.id), details="User login", ip=ip)
+
+    await manager.broadcast({
+        "type": "new_login",
+        "data": {
+            "username": user.username,
+            "role": user.role,
+            "ip": ip,
+            "at": datetime.utcnow().isoformat(),
+        },
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "username": user.username,
+        "role": user.role,
+        "name": payload.name,
     }
 
 @router.post("/auth/logout")
@@ -362,11 +455,12 @@ def delete_session(
     return {"message": f"Session {session_id} revoked"}
 
 @router.get("/auth/me")
-def get_me(current_user: models.User = Depends(get_current_user)):
+def get_me(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     return {
         "id": current_user.id,
         "username": current_user.username,
-        "role": current_user.role
+        "role": current_user.role,
+        "name": _employee_name_for(db, current_user.username)
     }
 
 
@@ -385,7 +479,7 @@ def get_status():
 @router.get("/dashboard", response_model=DashboardResponse)
 def get_dashboard(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     employees = db.query(models.Employee).all()
     alerts = db.query(models.Alert).all()
@@ -436,7 +530,7 @@ def get_dashboard(
 @router.get("/employees", response_model=List[EmployeeBase])
 def get_employees(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     employees = db.query(models.Employee).all()
     for emp in employees:
@@ -449,7 +543,7 @@ def get_employees(
 def get_employee_detail(
     employee_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if not employee:
@@ -590,7 +684,7 @@ def get_events(
     limit: int = 100,
     employee_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     if employee_id:
         events = EventService.get_events_by_employee(db, employee_id, skip, limit)
@@ -612,7 +706,7 @@ def get_recent_events(
 @router.get("/alerts", response_model=List[AlertDetailResponse])
 def get_alerts(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     alerts = db.query(models.Alert).all()
     alerts = sorted(alerts, key=lambda x: x.timestamp, reverse=True)
@@ -742,7 +836,7 @@ def analyze_employee(
 def get_ai_analysis(
     employee_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if not employee:
@@ -800,7 +894,7 @@ def get_report(
     end: Optional[str] = None,
     request: Request = None,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     """Generate and download a report (daily_threat, weekly_activity, ...)."""
     if report_type not in REPORT_TYPES:
@@ -992,7 +1086,7 @@ def create_command(
 def get_commands(
     employee_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(soc_only),
 ):
     """List recent commands issued to an employee's endpoint."""
     return list_commands(db, employee_id, limit=20)

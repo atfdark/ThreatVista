@@ -486,5 +486,10 @@ export const api = {
       }
       throw new Error("Connection failed. Use admin / admin123 (or analyst / auditor accounts).");
     }
+  },
+
+  register: async (name, email, password) => {
+    const res = await http.post(`/auth/register`, { username: email, password, name });
+    return res.data;
   }
 };

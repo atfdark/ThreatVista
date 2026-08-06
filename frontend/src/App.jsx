@@ -10,12 +10,14 @@ import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import Audit from './pages/Audit';
 import ActiveSessions from './pages/ActiveSessions';
+import MyProfile from './pages/MyProfile';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/me" element={<MyProfile />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="sessions" element={<ActiveSessions />} />
