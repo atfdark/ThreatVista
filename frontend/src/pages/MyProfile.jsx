@@ -1,8 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, LogOut, User, Mail, BadgeCheck, Activity } from 'lucide-react';
+import {
+  ShieldCheck, LogOut, User, Mail, BadgeCheck, Laptop, Download, RefreshCw, CheckCircle2, AlertTriangle
+} from 'lucide-react';
 import { api } from '../services/mockData';
-import { IST_TIME_ZONE } from '../utils/time';
+import { useWebSocket } from '../services/websocket';
+import { formatIST, toISTDate, IST_TIME_ZONE } from '../utils/time';
+
+/** Build + trigger the browser download of the agent config file. */
+function downloadAgentConfig(data) {
+  const blob = new Blob(
+    [JSON.stringify({ token: data.token, backend_url: data.backend_url }, null, 2)],
+    { type: 'application/json' }
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'threatvista-agent-config.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export default function MyProfile() {
   const navigate = useNavigate();
@@ -14,6 +33,13 @@ export default function MyProfile() {
     }
   });
   const [now, setNow] = useState(new Date());
+
+  // Live device status for this machine.
+  const [device, setDevice] = useState(null);       // serialized Device or null
+  const [online, setOnline] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollMsg, setEnrollMsg] = useState(null); // {type:'ok'|'error', text}
 
   // Employees land here; SOC staff should be on the command center instead.
   useEffect(() => {
@@ -27,6 +53,55 @@ export default function MyProfile() {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  const refreshStatus = async (silent = false) => {
+    if (!silent) setStatusLoading(true);
+    try {
+      const data = await api.getAgentStatus();
+      setDevice(data.device || null);
+      setOnline(!!data.online);
+    } catch (err) {
+      console.error('Failed to load agent status', err);
+    } finally {
+      if (!silent) setStatusLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshStatus();
+    const poll = setInterval(() => refreshStatus(true), 10000); // heartbeat cadence
+    return () => clearInterval(poll);
+  }, []);
+
+  // Live: registration broadcasts device_connected — refresh immediately.
+  useWebSocket((msg) => {
+    if (msg.type === 'device_connected') {
+      refreshStatus(true);
+    }
+  });
+
+  const handleConnect = async () => {
+    setEnrolling(true);
+    setEnrollMsg(null);
+    try {
+      const data = await api.enrollDevice();
+      downloadAgentConfig(data);
+      const expiresAt = toISTDate(data.expires_at);
+      setEnrollMsg({
+        type: 'ok',
+        text: `Config downloaded — token expires ${formatIST(expiresAt, { hour: '2-digit', minute: '2-digit' })}.`,
+      });
+      // The agent will register shortly; refresh status so the badge flips.
+      setTimeout(() => refreshStatus(true), 3000);
+    } catch (err) {
+      setEnrollMsg({
+        type: 'error',
+        text: err?.response?.data?.detail || 'Could not enroll this device. Try again.',
+      });
+    } finally {
+      setEnrolling(false);
+    }
+  };
 
   const handleLogout = async () => {
     await api.logout();
@@ -89,14 +164,96 @@ export default function MyProfile() {
           </div>
         </div>
 
-        {/* Monitoring notice */}
-        <div className="p-4 bg-cyber-primary/5 border border-cyber-primary/20 rounded-lg flex gap-3 items-start">
-          <Activity className="h-5 w-5 text-cyber-primary shrink-0 mt-0.5 animate-pulse" />
-          <p className="text-[11px] font-mono leading-relaxed text-cyber-muted">
-            This device is being monitored by the ThreatVista endpoint agent.
-            File, USB, and system activity is logged in the Security Operations Center.
-            Your session was recorded with your sign-in details.
-          </p>
+        {/* This Device — token-based enrollment */}
+        <div className="p-4 bg-cyber-bg/60 border border-cyber-border/60 rounded-lg mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Laptop className="h-4 w-4 text-cyber-primary" />
+              <span className="text-[10px] font-mono uppercase tracking-wider text-cyber-muted">This Device</span>
+            </div>
+            <button
+              onClick={() => refreshStatus()}
+              disabled={statusLoading}
+              className="flex items-center gap-1 text-cyber-muted hover:text-cyber-primary transition-colors focus:outline-none"
+              title="Refresh device status"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${statusLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {/* Status badge */}
+          <div className="flex items-center gap-2 mb-3">
+            <span
+              className={`inline-flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border uppercase font-bold ${
+                online
+                  ? 'text-cyber-success bg-cyber-success/10 border-cyber-success/30'
+                  : 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30'
+              }`}
+            >
+              <span className={`h-2 w-2 rounded-full ${online ? 'bg-cyber-success animate-pulse shadow-[0_0_8px_#10b981]' : 'bg-cyber-danger'}`} />
+              {online ? 'Online' : 'Disconnected'}
+            </span>
+            {device?.hostname && (
+              <span className="text-[10px] font-mono text-cyber-muted">{device.hostname}</span>
+            )}
+          </div>
+
+          {online && device ? (
+            <div className="text-[11px] font-mono text-cyber-muted space-y-1 mb-3">
+              <p><span className="text-cyber-text">Device:</span> {device.device_id}</p>
+              <p><span className="text-cyber-text">Last heartbeat:</span> {device.last_seen_at ? formatIST(device.last_seen_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</p>
+            </div>
+          ) : (
+            <p className="text-[11px] font-mono leading-relaxed text-cyber-muted mb-3">
+              This laptop is not connected yet. Connect it below to start secure
+              monitoring — no email or IP needed.
+            </p>
+          )}
+
+          {/* Connect action */}
+          {online ? (
+            <div className="flex items-center gap-2 text-[11px] font-mono text-cyber-success">
+              <CheckCircle2 className="h-4 w-4" />
+              Device is streaming telemetry to the SOC dashboard.
+            </div>
+          ) : (
+            <button
+              onClick={handleConnect}
+              disabled={enrolling}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-cyber-primary/15 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg rounded-lg border border-cyber-primary/30 text-xs font-bold tracking-wider transition-all disabled:opacity-50"
+            >
+              {enrolling ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {enrolling ? 'GENERATING TOKEN...' : 'CONNECT THIS DEVICE'}
+            </button>
+          )}
+
+          {enrollMsg && (
+            <div
+              className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg border text-[11px] font-mono ${
+                enrollMsg.type === 'ok'
+                  ? 'bg-cyber-success/10 border-cyber-success/30 text-cyber-success'
+                  : 'bg-cyber-danger/10 border-cyber-danger/30 text-cyber-danger'
+              }`}
+            >
+              {enrollMsg.type === 'ok' ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
+              {enrollMsg.text}
+            </div>
+          )}
+        </div>
+
+        {/* Enrollment instructions */}
+        <div className="p-4 bg-cyber-primary/5 border border-cyber-primary/20 rounded-lg">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-cyber-muted mb-2">How to connect</p>
+          <ol className="text-[11px] font-mono leading-relaxed text-cyber-muted list-decimal list-inside space-y-1">
+            <li>Click <span className="text-cyber-primary">Connect This Device</span> — a config file downloads.</li>
+            <li>Keep <span className="text-cyber-text">threatvista-agent-config.json</span> next to the agent folder.</li>
+            <li>Double-click <span className="text-cyber-text">start_agent.bat</span> on this laptop.</li>
+            <li>Status above flips to <span className="text-cyber-success">Online</span> automatically.</li>
+          </ol>
         </div>
       </div>
     </div>

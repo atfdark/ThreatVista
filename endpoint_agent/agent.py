@@ -8,6 +8,17 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Resolve which backend + identity to use BEFORE importing sender.py, which
+# bakes API_BASE_URL from the BACKEND_URL environment variable at import time.
+from endpoint_agent.utils import enrollment
+
+ENROLLMENT = enrollment.load_enrollment_config()   # freshly downloaded token
+DEVICE_IDENTITY = enrollment.load_device_identity()  # already-registered device
+if ENROLLMENT:
+    os.environ["BACKEND_URL"] = ENROLLMENT["backend_url"]
+elif DEVICE_IDENTITY and DEVICE_IDENTITY.get("backend_url"):
+    os.environ["BACKEND_URL"] = DEVICE_IDENTITY["backend_url"]
+
 import time
 import threading
 from datetime import datetime
@@ -22,14 +33,13 @@ from endpoint_agent.monitors.system_monitor import (
     get_running_processes,
 )
 from endpoint_agent.utils.sender import (
-    send_event,
+    send_event_batch,
     send_heartbeat,
-    register_device,
+    register_device_with_token,
     check_backend_health,
 )
+from endpoint_agent.utils.batcher import EventBatcher
 
-# Which employee this machine belongs to. Override with AGENT_EMPLOYEE_EMAIL.
-EMPLOYEE_EMAIL = os.environ.get("AGENT_EMPLOYEE_EMAIL", "rahul.sharma@threatvista.com")
 HEARTBEAT_SECONDS = int(os.environ.get("AGENT_HEARTBEAT_SECONDS", "30"))
 
 
@@ -39,6 +49,9 @@ class EndpointAgent:
         self.employee_id = None
         self.device_id = None
         self._usb_monitor = None
+        # Collect telemetry for ~1s (or 100 events) and send it as one bulk
+        # request instead of one HTTP POST per event.
+        self._batcher = EventBatcher(send_event_batch)
 
     def _event_callback(self, event_data):
         event_data["employee_id"] = self.employee_id
@@ -49,47 +62,71 @@ class EndpointAgent:
             event_data.setdefault("cpu_usage", metrics.get("cpu_usage"))
             event_data.setdefault("ram_usage", metrics.get("ram_usage"))
 
-        send_event(event_data)
+        self._batcher.add(event_data)
 
     def _register(self):
-        """Register this machine's device and resolve the employee identity.
+        """Resolve this machine's device + employee identity.
 
-        The backend resolves the employee from AGENT_EMPLOYEE_EMAIL and returns
-        their real id in the registration response. Without this, events fell
-        back to employee_id=1 (the directory lookup needs auth and fails).
+        Preferred path: an enrollment token freshly downloaded from the employee
+        profile page. The backend validates/consumes it and returns the real
+        employee id, which we persist so the next run simply reconnects to the
+        same device (no duplicate registration, no re-enrollment).
         """
-        device_info = get_device_info()
-        result, err = register_device(EMPLOYEE_EMAIL, device_info)
-        if err:
-            print(f"[!] Device registration failed: {err}")
-            return
-        self.device_id = result.get("device_id")
-        self.employee_id = result.get("employee_id")
-        print(f"[+] Registered device {self.device_id} for {EMPLOYEE_EMAIL} (employee id {self.employee_id})")
+        if ENROLLMENT:
+            device_info = get_device_info()
+            result, err = register_device_with_token(ENROLLMENT["token"], device_info)
+            if err:
+                print(f"[!] Device registration failed: {err}")
+                print("    The token may have expired (10 minutes) or already been used.")
+                print("    Log in to ThreatVista again and click 'Connect This Device' to get a fresh one.")
+                return False
+            self.device_id = result.get("device_id")
+            self.employee_id = result.get("employee_id")
+            employee_name = result.get("employee_name", "?")
+            print(f"[+] Registered device {self.device_id} for employee #{self.employee_id} ({employee_name})")
+            enrollment.save_device_identity({
+                "device_id": self.device_id,
+                "employee_id": self.employee_id,
+                "backend_url": ENROLLMENT["backend_url"],
+            })
+            # The token is single-use; remove the file so it can never be reused.
+            enrollment.delete_enrollment_config(ENROLLMENT)
+            return True
+
+        if DEVICE_IDENTITY:
+            self.device_id = DEVICE_IDENTITY["device_id"]
+            self.employee_id = DEVICE_IDENTITY["employee_id"]
+            print(f"[+] Reconnecting to device {self.device_id} (employee #{self.employee_id}) — no re-enrollment needed")
+            return True
+
+        print("[!] No enrollment config found.")
+        print("    Log in to ThreatVista, open your profile, click 'Connect This Device',")
+        print("    download the config file, then run start_agent.bat again.")
+        return False
 
     def start(self):
-        print(f"[*] ThreatVista Endpoint Agent starting for {EMPLOYEE_EMAIL}")
-        if not check_backend_health():
-            print("[!] Backend not reachable. Events will be queued locally (not implemented in Phase 2).")
-            self.employee_id = 1  # fall back so the agent can still attempt sends
-        else:
-            print("[+] Backend connected.")
-            self._register()
+        backend_label = (
+            ENROLLMENT["backend_url"] if ENROLLMENT
+            else (DEVICE_IDENTITY or {}).get("backend_url", "?")
+        )
+        print(f"[*] ThreatVista Endpoint Agent starting (backend: {backend_label})")
 
-        # Resolve employee id from the employee directory when possible.
-        if self.employee_id is None:
-            try:
-                from endpoint_agent.utils.sender import API_BASE_URL
-                import requests
-                emps = requests.get(f"{API_BASE_URL}/employees", timeout=5).json()
-                for emp in emps:
-                    if emp.get("email", "").lower() == EMPLOYEE_EMAIL.lower():
-                        self.employee_id = emp["id"]
-                        break
-            except Exception:
-                pass
-            if self.employee_id is None:
-                self.employee_id = 1  # default (single-machine demo)
+        if not (ENROLLMENT or DEVICE_IDENTITY):
+            print("[!] This laptop is not enrolled yet.")
+            print("    1. Log in to ThreatVista in a browser.")
+            print("    2. Open your profile and click 'Connect This Device'.")
+            print("    3. Keep threatvista-agent-config.json next to this folder (or in Downloads).")
+            print("    4. Run start_agent.bat again.")
+            return
+
+        if not check_backend_health():
+            print("[!] Backend not reachable. Start the ThreatVista backend, then run this again.")
+            print("    Events are NOT queued locally, so nothing will be sent while offline.")
+            return
+
+        print("[+] Backend connected.")
+        if not self._register():
+            return  # token rejected / no identity — do not monitor under a wrong employee
 
         self.running = True
 
@@ -180,6 +217,7 @@ class EndpointAgent:
 
     def stop(self):
         self.running = False
+        self._batcher.stop()
         print("\n[*] Stopping endpoint agent...")
 
 if __name__ == "__main__":

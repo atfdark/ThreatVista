@@ -1,40 +1,114 @@
 """
 ThreatVista agent (device) service.
 
-Manages the per-employee endpoint Device profile: registration at agent startup
-and periodic heartbeats that drive online/offline status and endpoint health.
+Manages the per-employee endpoint Device profile: token-based enrollment,
+registration at agent startup, and periodic heartbeats that drive online/offline
+status and endpoint health.
 """
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.models.database import Device, Employee
+from backend.models.database import AgentEnrollmentToken, Device, Employee
 
 # An employee is considered online while a heartbeat was received within this
 # window. The endpoint agent heartbeats every endpoint_poll_seconds (default
 # 30s), so 180s gives a stable lease while still surfacing real offline states.
 HEARTBEAT_TIMEOUT_SECONDS = 180
 
+# Enrollment tokens expire shortly after issue and are single-use, so a leaked
+# token cannot register a device later on.
+ENROLLMENT_TOKEN_TTL_MINUTES = 10
+
 
 def _now():
     return datetime.utcnow()
 
 
-def register_device(db: Session, employee_email: str, info: Dict) -> Dict:
-    """Resolve the employee by email and create/update their Device profile.
-
-    Returns ``{employee_id, device_id}`` so the agent can attach identity to
-    every subsequent event and heartbeat.
-    """
-    employee = (
+def resolve_employee_by_email(db: Session, email: str) -> Optional[Employee]:
+    """Look up an Employee row by email (case-insensitive)."""
+    if not email:
+        return None
+    return (
         db.query(Employee)
-        .filter(func.lower(Employee.email) == employee_email.strip().lower())
+        .filter(func.lower(Employee.email) == email.strip().lower())
         .first()
     )
+
+
+def create_enrollment_token(db: Session, employee: Employee, backend_url: str) -> Dict:
+    """Issue a fresh one-time enrollment token for an employee's device.
+
+    Returns the payload the employee page needs to build the downloadable
+    ``threatvista-agent-config.json`` (token + backend URL only — no email).
+    """
+    token = uuid.uuid4().hex
+    now = _now()
+    expires_at = now + timedelta(minutes=ENROLLMENT_TOKEN_TTL_MINUTES)
+    row = AgentEnrollmentToken(
+        employee_id=employee.id,
+        token=token,
+        created_at=now,
+        expires_at=expires_at,
+        used=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "token": token,
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "employee_email": employee.email,
+        "backend_url": backend_url,
+        "expires_at": expires_at.isoformat(),
+        "expires_in_seconds": int((expires_at - now).total_seconds()),
+    }
+
+
+def validate_enrollment_token(db: Session, token: str) -> Employee:
+    """Validate a token without consuming it. Raises ValueError on any failure.
+
+    Mirrors the HTTP status mapping in the route: unknown/expired/used tokens are
+    all rejected (401) so an attacker cannot distinguish the failure reason.
+    """
+    row = db.query(AgentEnrollmentToken).filter(AgentEnrollmentToken.token == token).first()
+    if row is None:
+        raise ValueError("Invalid enrollment token")
+    if row.used:
+        raise ValueError("Enrollment token has already been used")
+    if _now() > row.expires_at:
+        raise ValueError("Enrollment token has expired")
+    employee = db.query(Employee).filter(Employee.id == row.employee_id).first()
+    if employee is None:
+        raise ValueError("Invalid enrollment token")
+    return employee
+
+
+def consume_enrollment_token(db: Session, token: str, device_id: str) -> None:
+    """Mark a validated token as used, recording the device it registered."""
+    row = db.query(AgentEnrollmentToken).filter(AgentEnrollmentToken.token == token).first()
+    if row is None:
+        return
+    row.used = True
+    row.device_id = device_id
+    db.commit()
+
+
+def register_device(db: Session, employee_id: int, info: Dict) -> Dict:
+    """Create/update the Device profile for an employee (one device each).
+
+    Returns ``{employee_id, device_id, employee_name, employee_email}`` so the
+    agent can attach identity to every subsequent event and heartbeat. Upserting
+    on ``Device.employee_id`` makes re-enrollment safe: a device that is already
+    registered is updated in place, never duplicated (Part 8 reconnect).
+    """
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee:
-        raise ValueError(f"No employee found for email '{employee_email}'")
+        raise ValueError(f"No employee found for id '{employee_id}'")
 
     device = db.query(Device).filter(Device.employee_id == employee.id).first()
     if device is None:
@@ -61,7 +135,12 @@ def register_device(db: Session, employee_email: str, info: Dict) -> Dict:
 
     db.commit()
     db.refresh(device)
-    return {"employee_id": employee.id, "device_id": device.device_id}
+    return {
+        "employee_id": employee.id,
+        "device_id": device.device_id,
+        "employee_name": employee.name,
+        "employee_email": employee.email,
+    }
 
 
 def heartbeat(db: Session, device_id: str, metrics: Dict) -> Optional[Dict]:

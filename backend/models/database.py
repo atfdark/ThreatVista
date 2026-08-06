@@ -32,6 +32,8 @@ class Employee(Base):
     behavior_profile = relationship("BehaviorProfile", back_populates="employee", uselist=False)
     devices = relationship("Device", back_populates="employee", uselist=False)
     commands = relationship("RemoteCommand", back_populates="employee")
+    incidents = relationship("Incident", back_populates="employee", cascade="all, delete-orphan")
+    enrollment_tokens = relationship("AgentEnrollmentToken", back_populates="employee", cascade="all, delete-orphan")
 
 
 class Event(Base):
@@ -189,6 +191,27 @@ class Device(Base):
     employee = relationship("Employee", back_populates="devices")
 
 
+class AgentEnrollmentToken(Base):
+    """One-time endpoint enrollment credential.
+
+    Created when an employee clicks "Connect This Device" on their profile page.
+    The token is a random UUID, expires after ``ENROLLMENT_TOKEN_TTL_MINUTES``
+    (10 minutes), is single-use, and is invalidated the moment the endpoint
+    agent registers with it — so a leaked token can never enroll a second time.
+    """
+    __tablename__ = "agent_enrollment_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    token = Column(String, unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+    device_id = Column(String, nullable=True)  # set once the token is consumed
+
+    employee = relationship("Employee", back_populates="enrollment_tokens")
+
+
 class RemoteCommand(Base):
     """A command issued from the dashboard to an endpoint agent.
 
@@ -207,3 +230,35 @@ class RemoteCommand(Base):
     completed_at = Column(DateTime, nullable=True)
 
     employee = relationship("Employee", back_populates="commands")
+
+
+class Incident(Base):
+    """A persistent security incident attached to one employee.
+
+    Created once the AI risk crosses the configured suspicious threshold, then
+    kept ACTIVE/INVESTIGATING until an analyst explicitly resolves or archives
+    it. The incident's ``risk_score`` is monotonic: it only ever increases when
+    new evidence arrives and never auto-decays, so the dashboard shows an
+    enterprise-EDR-style incident that stays open until closed.
+
+    The full evidence + action trail lives in ``timeline_json`` (a list of
+    ``{ts, type, title, detail}`` entries) so nothing is lost after resolving.
+    """
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    title = Column(String, nullable=False, default="Suspicious Activity Detected")
+    severity = Column(String, nullable=False, default="Medium")  # Critical | High | Medium
+    status = Column(String, nullable=False, default="ACTIVE")    # ACTIVE | INVESTIGATING | RESOLVED | ARCHIVED
+    risk_score = Column(Integer, default=0)                      # monotonic incident score
+    confidence = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String, nullable=True)                  # admin username
+    resolution_reason = Column(String, nullable=True)
+    timeline_json = Column(Text, default="[]")                   # [{ts, type, title, detail}]
+    active = Column(Boolean, default=True)                       # True only for ACTIVE/INVESTIGATING
+
+    employee = relationship("Employee", back_populates="incidents")

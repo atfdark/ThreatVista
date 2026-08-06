@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import router as api_router
 from backend.config import CORS_ORIGINS, LAN_MODE, HOST, PORT
 from backend.websocket.manager import manager
+from backend.database.connection import Base, engine
 
 app = FastAPI(
     title="ThreatVista API",
@@ -46,6 +47,11 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 app.include_router(api_router, prefix="/api")
+
+# Create any missing tables at startup (additive — never drops data). The
+# models are all registered by the time the router import chain has run, so
+# the new `incidents` table appears in existing SQLite DBs without re-seeding.
+Base.metadata.create_all(bind=engine)
 
 if __name__ == "__main__":
     import uvicorn

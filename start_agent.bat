@@ -3,30 +3,21 @@ REM ============================================================
 REM  ThreatVista Endpoint Agent - one-click launcher
 REM  Run this on an EMPLOYEE laptop (Windows, Python 3.10+ installed).
 REM
-REM  Usage:   start_agent.bat <employee-email>
-REM  Example: start_agent.bat kamaal@gmail.com
+REM  No arguments needed. Before running:
+REM    1. Log in to ThreatVista on this laptop.
+REM    2. Open your profile and click "Connect This Device".
+REM    3. The browser downloads threatvista-agent-config.json.
+REM       Leave it next to this file (or in Downloads).
+REM    4. Double-click this file. Done.
 REM
 REM  What it does:
 REM    1. Installs the agent's Python dependencies (safe to re-run).
 REM    2. Registers this laptop as the employee's device (shows in
-REM       Active Sessions as ONLINE).
+REM       Active Sessions as ONLINE) and consumes the enrollment token.
 REM    3. Streams USB / file / process / network activity to the SOC
 REM       dashboard in real time.
 REM ============================================================
 setlocal
-
-REM ---- EDIT THIS: your SOC server's LAN IP (the admin laptop) ----
-set "BACKEND_URL=http://192.168.0.243:8000"
-REM ----------------------------------------------------------------
-
-set "AGENT_EMPLOYEE_EMAIL=%~1"
-if "%AGENT_EMPLOYEE_EMAIL%"=="" (
-    echo.
-    echo   Usage: start_agent.bat ^<employee-email^>
-    echo   Example: start_agent.bat kamaal@gmail.com
-    echo.
-    exit /b 1
-)
 
 REM Run from the folder containing this file (the project root)
 cd /d "%~dp0"
@@ -45,8 +36,7 @@ if errorlevel 1 (
 echo.
 echo   ========================================
 echo    ThreatVista Endpoint Agent
-echo    Employee : %AGENT_EMPLOYEE_EMAIL%
-echo    Backend  : %BACKEND_URL%
+echo    Backend  : read from threatvista-agent-config.json
 echo   ========================================
 echo.
 

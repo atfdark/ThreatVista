@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
+import { useWebSocket } from '../services/websocket';
 import { formatIST, toISTDate } from '../utils/time';
+import IncidentCard from '../components/IncidentCard';
 
 export default function EmployeeProfile() {
   const { id } = useParams();
@@ -98,6 +100,14 @@ export default function EmployeeProfile() {
     const t = setInterval(() => loadData(true), 15000);
     return () => clearInterval(t);
   }, [loadData]);
+
+  // When this employee's device registers (token-based enrollment), refresh so
+  // Endpoint Status flips to ONLINE immediately.
+  useWebSocket((msg) => {
+    if (msg.type === 'device_connected' && (msg.data?.employee?.id === parseInt(id) || !id)) {
+      loadData(true);
+    }
+  });
 
   if (loading) {
     return (
@@ -185,6 +195,63 @@ export default function EmployeeProfile() {
             </div>
           </div>
         </div>
+
+        {/* Current Incident (persistent lifecycle, monotonic risk) */}
+        {employee.incident && (
+          <div className="space-y-3">
+            <h3 className="text-sm font-bold font-mono uppercase text-cyber-muted tracking-wider flex items-center gap-2">
+              <AlertOctagon className="h-5 w-5 text-cyber-danger" /> Current Incident
+            </h3>
+            <IncidentCard incident={employee.incident} onChange={() => loadData(true)} />
+          </div>
+        )}
+
+        {/* Resolution History */}
+        {employee.incident_history && employee.incident_history.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-sm font-bold font-mono uppercase text-cyber-muted tracking-wider flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-cyber-success" /> Resolution History
+            </h3>
+            <div className="glass-panel overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-cyber-border text-cyber-muted uppercase font-mono text-[9px] tracking-wider">
+                      <th className="py-3 pl-4">Incident</th>
+                      <th className="py-3">Severity</th>
+                      <th className="py-3">Status</th>
+                      <th className="py-3">Resolved By</th>
+                      <th className="py-3">Reason</th>
+                      <th className="py-3 text-right pr-4">Resolved At</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-cyber-border/40 font-mono">
+                    {employee.incident_history.map((h) => (
+                      <tr key={h.id} className="hover:bg-cyber-border/10">
+                        <td className="py-3 pl-4 text-cyber-text">{h.title}</td>
+                        <td className="py-3 whitespace-nowrap">
+                          <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase ${
+                            h.severity === 'Critical' || h.severity === 'High'
+                              ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25'
+                              : 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25'
+                          }`}>
+                            {h.severity}
+                          </span>
+                        </td>
+                        <td className="py-3 text-cyber-muted uppercase">{h.status}</td>
+                        <td className="py-3 text-cyber-muted">{h.resolved_by || '—'}</td>
+                        <td className="py-3 text-cyber-muted">{h.resolution_reason || '—'}</td>
+                        <td className="py-3 pr-4 text-right text-cyber-muted whitespace-nowrap">
+                          {h.resolved_at ? formatIST(h.resolved_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* EDR: Endpoint Status / Device Info / Health */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

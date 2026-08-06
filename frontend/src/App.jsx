@@ -4,6 +4,7 @@ import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import EmployeeProfile from './pages/EmployeeProfile';
+import Incidents from './pages/Incidents';
 import Alerts from './pages/Alerts';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
@@ -23,6 +24,7 @@ function App() {
           <Route path="sessions" element={<ActiveSessions />} />
           <Route path="employees" element={<EmployeeProfile />} />
           <Route path="employees/:id" element={<EmployeeProfile />} />
+          <Route path="incidents" element={<Incidents />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="settings" element={<Settings />} />

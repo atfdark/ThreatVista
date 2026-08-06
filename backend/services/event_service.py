@@ -25,6 +25,35 @@ class EventService:
         return event
 
     @staticmethod
+    def bulk_create(db: Session, events_data: list[dict]) -> list[Event]:
+        """Insert many events in one database transaction.
+
+        Rows are added and flushed (so IDs are assigned for downstream use in
+        broadcasts) but NOT committed — the caller commits once after all batch
+        processing (alerts, risk, incidents) so the whole batch lands atomically.
+        """
+        rows = [
+            Event(
+                employee_id=evt.get("employee_id", 1),
+                timestamp=evt.get("timestamp", datetime.utcnow()),
+                event_type=evt.get("event_type"),
+                filename=evt.get("filename"),
+                extension=evt.get("extension"),
+                size=evt.get("size"),
+                folder=evt.get("folder"),
+                usb_status=evt.get("usb_status"),
+                network_upload=evt.get("network_upload"),
+                cpu_usage=evt.get("cpu_usage"),
+                ram_usage=evt.get("ram_usage"),
+                details=evt.get("details"),
+            )
+            for evt in events_data
+        ]
+        db.add_all(rows)
+        db.flush()
+        return rows
+
+    @staticmethod
     def get_events(db: Session, skip: int = 0, limit: int = 100):
         return db.query(Event).order_by(Event.timestamp.desc()).offset(skip).limit(limit).all()
 

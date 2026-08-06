@@ -1,18 +1,20 @@
 import csv
 import io
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta
 from backend.config import AGENT_API_KEY
-from backend.database.connection import get_db, SessionLocal
+from backend.database.connection import get_db
 from backend.models import database as models
 from backend.models.database import AuditLog, Session as SessionModel
 from backend.services.event_service import EventService
 from backend.services.alert_engine import RuleBasedAlertEngine
-from backend.services.config_service import get_config, get_thresholds, to_dict, update_config
+from backend.services import batch_service
+from backend.services import incident_service
+from backend.services.config_service import get_config, to_dict, update_config
 from backend.services.audit_service import client_ip, log_action
 from backend.services.agent_service import (
     register_device,
@@ -20,6 +22,11 @@ from backend.services.agent_service import (
     get_device,
     device_to_dict,
     compute_online_counts,
+    create_enrollment_token,
+    validate_enrollment_token,
+    consume_enrollment_token,
+    resolve_employee_by_email,
+    is_online,
 )
 from backend.services.command_service import request_command, list_commands, ALLOWED_COMMANDS
 from backend.reports.report_service import generate_report, REPORT_TYPES
@@ -34,7 +41,6 @@ from backend.auth import (
     verify_password,
     require_roles,
 )
-from ai.pipeline import AIPipeline
 
 router = APIRouter()
 
@@ -69,18 +75,10 @@ def _record_failed_login(username: str) -> bool:
 def _clear_lockout(username: str):
     _LOGIN_ATTEMPTS.pop(username, None)
 
-ai_pipeline = AIPipeline()
-
 
 def _run_ai(db: Session, employee_id: int):
     """Run the AI pipeline for an employee, applying persisted risk thresholds."""
-    events = db.query(models.Event).filter(models.Event.employee_id == employee_id).all()
-    raw = [{"id": e.id, "event_type": e.event_type, "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            "size": e.size, "extension": e.extension, "folder": e.folder, "usb_status": e.usb_status,
-            "network_upload": e.network_upload, "cpu_usage": e.cpu_usage, "ram_usage": e.ram_usage,
-            "details": e.details} for e in events]
-    thresholds = get_thresholds(db)
-    return ai_pipeline.run(raw, employee_id, thresholds)
+    return batch_service.run_ai_for_employee(db, employee_id)
 
 
 # --- Live risk persistence ---------------------------------------------------
@@ -92,47 +90,55 @@ RISK_RECOMPUTE_SECONDS = 30
 _last_risk_recompute = {}  # employee_id -> datetime
 
 
-def _persist_employee_risk(employee_id: int):
-    """Background task: recompute + store an employee's live risk score and turn
-    correlation findings into alert rows — so the Alerts ledger reflects the
-    multi-event patterns (evidence destruction, USB exfiltration, night upload)
-    that the single-event alert rules don't cover."""
-    db = SessionLocal()
-    try:
-        last = _last_risk_recompute.get(employee_id)
-        if last and (datetime.utcnow() - last).total_seconds() < RISK_RECOMPUTE_SECONDS:
-            return
-        _last_risk_recompute[employee_id] = datetime.utcnow()
+def _recompute_risk_and_incidents(db: Session, employee_id: int, evidence: list = None,
+                                  title_hint: str = None):
+    """Recompute + persist an employee's live risk, correlation alerts and
+    incident state, throttled to once per 30s per employee.
 
-        result = _run_ai(db, employee_id)
-        explanation = result["explanation"]
-        emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
-        if emp:
-            emp.risk_score = explanation["risk_score"]
-            emp.status = explanation["status"]
+    Returns the incident change dict (``{"event_type", "incident"}``) when a
+    lifecycle event occurred so async routes can broadcast it, else None. The
+    caller owns the session (no session is opened here).
+    """
+    last = _last_risk_recompute.get(employee_id)
+    if last and (datetime.utcnow() - last).total_seconds() < RISK_RECOMPUTE_SECONDS:
+        return None
+    _last_risk_recompute[employee_id] = datetime.utcnow()
 
-        # Persist correlation incidents as alerts (dedupe exact active ones so a
-        # persisting pattern doesn't spam the ledger every recompute).
-        for incident in result.get("correlations", []):
-            reason = incident.get("reason") or incident.get("name") or "Correlation"
-            dup = db.query(models.Alert).filter(
-                models.Alert.employee_id == employee_id,
-                models.Alert.status == "Active",
-                models.Alert.reason == reason,
-            ).first()
-            if not dup:
-                db.add(models.Alert(
-                    employee_id=employee_id,
-                    severity=incident.get("severity", "Medium"),
-                    reason=reason,
-                    status="Active",
-                    timestamp=datetime.utcnow(),
-                ))
-        db.commit()
-    except Exception:
-        pass
-    finally:
-        db.close()
+    result = _run_ai(db, employee_id)
+    batch_service.persist_risk_and_correlations(db, employee_id, result)
+    change = incident_service.apply_risk(db, employee_id, result,
+                                         title_hint=title_hint, evidence=evidence)
+    db.commit()
+    if change:
+        return {"event_type": change[0], "incident": incident_service.serialize(db, change[1])}
+    return None
+
+
+def _build_analysis_response(db: Session, employee_id: int, result: dict) -> "AIAnalysisResponse":
+    """AI response using the PRIMARY displayed score: the active incident's
+    monotonic risk when one exists, otherwise the live explanation values."""
+    explanation = result["explanation"]
+    active_inc = incident_service.get_active_incident(db, employee_id)
+    if active_inc:
+        risk_score = active_inc.risk_score
+        status = active_inc.severity
+        confidence = active_inc.confidence
+    else:
+        risk_score = explanation["risk_score"]
+        status = explanation["status"]
+        confidence = explanation.get("confidence", 0)
+    return AIAnalysisResponse(
+        employee_id=employee_id,
+        risk_score=risk_score,
+        status=status,
+        reasons=explanation["reasons"],
+        recommendations=explanation["recommendations"],
+        deviation=explanation.get("deviation", {}),
+        model_anomaly=explanation.get("model_anomaly", False),
+        model_score=explanation.get("model_score", 0),
+        confidence=confidence,
+        timestamp=result["timestamp"],
+    )
 
 # Pydantic Schemas
 class LoginRequest(BaseModel):
@@ -188,6 +194,11 @@ class EventResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class EventBatchRequest(BaseModel):
+    """Payload for the bulk-ingest endpoint: a list of events from one agent
+    batch, sent as a single HTTP request."""
+    events: List[EventCreate]
+
 class EmployeeBase(BaseModel):
     id: int
     name: str
@@ -198,6 +209,7 @@ class EmployeeBase(BaseModel):
     status: str
     online: bool = False
     hostname: Optional[str] = None
+    incident: Optional[dict] = None  # active incident, if any
 
     class Config:
         from_attributes = True
@@ -245,6 +257,8 @@ class EmployeeDetailResponse(BaseModel):
     online: bool = False
     endpoint_health: Optional[dict] = None
     commands: List[dict] = []
+    incident: Optional[dict] = None             # active incident (current + timeline)
+    incident_history: List[dict] = []           # resolved / archived incidents
 
     class Config:
         from_attributes = True
@@ -275,6 +289,9 @@ class AIAnalysisResponse(BaseModel):
 class AlertStatusUpdate(BaseModel):
     status: str  # Active | Investigating | Resolved
 
+class IncidentResolveRequest(BaseModel):
+    reason: str
+
 class DashboardResponse(BaseModel):
     total_employees: int
     active_alerts: int
@@ -287,7 +304,12 @@ class DashboardResponse(BaseModel):
 
 # --- Agent & device schemas ------------------------------------------------
 class AgentRegisterRequest(BaseModel):
-    employee_email: str
+    # Token-based enrollment (current). Either this or the legacy email field
+    # below must be supplied.
+    enrollment_token: Optional[str] = None
+    # Legacy path: kept so already-installed agents keep working until they
+    # upgrade to the token-based flow.
+    employee_email: Optional[str] = None
     device_id: Optional[str] = None
     hostname: Optional[str] = None
     os_version: Optional[str] = None
@@ -554,7 +576,12 @@ def get_dashboard(
         explanation = result["explanation"]
         emp.risk_score = int(explanation["risk_score"])
         emp.status = explanation["status"]
-        risk_scores.append(explanation["risk_score"])
+        # Keep incident state consistent with the fresh assessment (never lowers).
+        incident_service.apply_risk(db, emp.id, result)
+        active_inc = incident_service.get_active_incident(db, emp.id)
+        # Primary displayed score: the incident's monotonic risk when one is active.
+        primary = active_inc.risk_score if active_inc else int(explanation["risk_score"])
+        risk_scores.append(primary)
     db.commit()
 
     risk_dist = {"Low (0-30)": 0, "Medium (31-60)": 0, "High (61-80)": 0, "Critical (81-100)": 0}
@@ -601,6 +628,7 @@ def get_employees(
         device = get_device(db, emp.id)
         emp.online = bool(device and device_to_dict(device).get("online"))
         emp.hostname = device.hostname if device else None
+        emp.incident = incident_service.serialize(db, incident_service.get_active_incident(db, emp.id))
     return employees
 
 @router.get("/employees/{employee_id}", response_model=EmployeeDetailResponse)
@@ -618,18 +646,11 @@ def get_employee_detail(
 
     result = _run_ai(db, employee_id)
     explanation = result["explanation"]
-    employee.ai_analysis = AIAnalysisResponse(
-        employee_id=employee_id,
-        risk_score=explanation["risk_score"],
-        status=explanation["status"],
-        reasons=explanation["reasons"],
-        recommendations=explanation["recommendations"],
-        deviation=explanation.get("deviation", {}),
-        model_anomaly=explanation.get("model_anomaly", False),
-        model_score=explanation.get("model_score", 0),
-        confidence=explanation.get("confidence", 0),
-        timestamp=result["timestamp"]
-    )
+    employee.risk_score = int(explanation["risk_score"])
+    employee.status = explanation["status"]
+    incident_service.apply_risk(db, employee_id, result)
+    db.commit()
+    employee.ai_analysis = _build_analysis_response(db, employee_id, result)
 
     # EDR device + online status + endpoint health + command history
     device = get_device(db, employee_id)
@@ -646,6 +667,26 @@ def get_employee_detail(
     else:
         employee.endpoint_health = None
     employee.commands = list_commands(db, employee_id, limit=10)
+
+    # Current incident + resolution history (full timeline preserved in both).
+    employee.incident = incident_service.serialize(
+        db, incident_service.get_active_incident(db, employee_id)
+    )
+    employee.incident_history = [
+        incident_service.serialize(db, inc)
+        for inc in (
+            db.query(models.Incident)
+            .filter(
+                models.Incident.employee_id == employee_id,
+                models.Incident.status.in_([
+                    incident_service.STATUS_RESOLVED,
+                    incident_service.STATUS_ARCHIVED,
+                ]),
+            )
+            .order_by(models.Incident.created_at.desc(), models.Incident.id.desc())
+            .all()
+        )
+    ]
 
     return employee
 
@@ -702,7 +743,6 @@ def get_endpoints(
 async def create_event(
     event: EventCreate,
     request: Request,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     # When an agent key is configured, telemetry must authenticate with it.
@@ -730,10 +770,13 @@ async def create_event(
 
     if alerts:
         for alert in alerts:
+            emp = db.query(models.Employee).filter(models.Employee.id == alert.employee_id).first()
             await manager.broadcast({
                 "type": "new_alert",
                 "data": {
                     "id": alert.id,
+                    "employee_id": alert.employee_id,
+                    "employee": {"id": alert.employee_id, "name": emp.name if emp else ""},
                     "severity": alert.severity,
                     "reason": alert.reason,
                     "status": alert.status,
@@ -741,11 +784,58 @@ async def create_event(
                 }
             })
 
-    # Refresh the employee's stored risk score in the background so the
-    # Dashboard / Active Sessions reflect live activity.
-    background_tasks.add_task(_persist_employee_risk, created_event.employee_id)
+    # Refresh the employee's stored risk + incident state (throttled per
+    # employee) and broadcast any incident lifecycle change immediately, so the
+    # dashboard reflects single-event activity without a page refresh.
+    evidence = []
+    if created_event.details:
+        evidence.append({
+            "title": created_event.event_type.replace("_", " ").title(),
+            "detail": created_event.details,
+        })
+    if alerts:
+        for alert in alerts:
+            evidence.append({"title": f"Alert: {alert.reason}", "detail": alert.severity})
+
+    change = _recompute_risk_and_incidents(
+        db, created_event.employee_id,
+        evidence=evidence,
+        title_hint=alerts[0].reason if alerts else None,
+    )
+    if change:
+        await manager.broadcast({"type": change["event_type"], "data": change["incident"]})
 
     return created_event
+
+
+@router.post("/events/batch")
+async def create_event_batch(
+    payload: EventBatchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Bulk-ingest one agent batch in a single transaction.
+
+    Inserts every event, runs the AI engine ONCE per employee in the batch,
+    detects burst incidents (e.g. "Mass File Activity — 150 files") and
+    broadcasts ONE consolidated WebSocket message instead of one per event.
+    """
+    if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid agent key",
+        )
+    if not payload.events:
+        return {"ingested": 0, "incidents": 0}
+
+    event_data = [evt.model_dump() for evt in payload.events]
+    result = batch_service.process_batch(db, event_data)
+
+    await manager.broadcast({"type": "batch_event", "data": result})
+    # Additive incident lifecycle broadcasts alongside the consolidated batch.
+    for change in result.get("incident_changes", []):
+        await manager.broadcast({"type": change["event_type"], "data": change["incident"]})
+    return {"ingested": len(event_data), "incidents": len(result["incidents"])}
 
 @router.get("/events", response_model=List[EventResponse])
 def get_events(
@@ -864,7 +954,7 @@ def get_audit_logs(
 
 # AI Analysis
 @router.post("/ai/analyze/{employee_id}", response_model=AIAnalysisResponse)
-def analyze_employee(
+async def analyze_employee(
     employee_id: int,
     request: Request,
     db: Session = Depends(get_db),
@@ -879,6 +969,7 @@ def analyze_employee(
 
     employee.risk_score = int(explanation["risk_score"])
     employee.status = explanation["status"]
+    change = incident_service.apply_risk(db, employee_id, result)
     db.commit()
 
     log_action(
@@ -888,21 +979,13 @@ def analyze_employee(
         ip=client_ip(request),
     )
 
-    return AIAnalysisResponse(
-        employee_id=employee_id,
-        risk_score=explanation["risk_score"],
-        status=explanation["status"],
-        reasons=explanation["reasons"],
-        recommendations=explanation["recommendations"],
-        deviation=explanation.get("deviation", {}),
-        model_anomaly=explanation.get("model_anomaly", False),
-        model_score=explanation.get("model_score", 0),
-        confidence=explanation.get("confidence", 0),
-        timestamp=result["timestamp"]
-    )
+    if change:
+        await manager.broadcast({"type": change[0], "data": incident_service.serialize(db, change[1])})
+
+    return _build_analysis_response(db, employee_id, result)
 
 @router.get("/ai/analysis/{employee_id}", response_model=AIAnalysisResponse)
-def get_ai_analysis(
+async def get_ai_analysis(
     employee_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(soc_only),
@@ -914,18 +997,176 @@ def get_ai_analysis(
     result = _run_ai(db, employee_id)
     explanation = result["explanation"]
 
-    return AIAnalysisResponse(
-        employee_id=employee_id,
-        risk_score=explanation["risk_score"],
-        status=explanation["status"],
-        reasons=explanation["reasons"],
-        recommendations=explanation["recommendations"],
-        deviation=explanation.get("deviation", {}),
-        model_anomaly=explanation.get("model_anomaly", False),
-        model_score=explanation.get("model_score", 0),
-        confidence=explanation.get("confidence", 0),
-        timestamp=result["timestamp"]
+    employee.risk_score = int(explanation["risk_score"])
+    employee.status = explanation["status"]
+    incident_service.apply_risk(db, employee_id, result)
+    db.commit()
+
+    return _build_analysis_response(db, employee_id, result)
+
+
+# ---------------------------------------------------------------------------
+# Incidents (persistent, lifecycle-driven) -----------------------------------
+# ---------------------------------------------------------------------------
+def _get_incident_or_404(db: Session, incident_id: int):
+    incident = db.query(models.Incident).filter(models.Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return incident
+
+
+@router.get("/incidents")
+def get_incidents(
+    status: Optional[str] = Query(None, description="Filter by incident status"),
+    employee_id: Optional[int] = Query(None, description="Filter by employee"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(soc_only),
+):
+    """All incidents, newest first, with optional status/employee filters."""
+    query = db.query(models.Incident)
+    if status:
+        query = query.filter(models.Incident.status == status)
+    if employee_id:
+        query = query.filter(models.Incident.employee_id == employee_id)
+    incidents = query.order_by(
+        models.Incident.created_at.desc(), models.Incident.id.desc()
+    ).all()
+    return [incident_service.serialize(db, inc) for inc in incidents]
+
+
+@router.get("/incidents/{incident_id}")
+def get_incident_detail(
+    incident_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(soc_only),
+):
+    """Single incident detail (includes the full timeline + resolution info)."""
+    return incident_service.serialize(db, _get_incident_or_404(db, incident_id))
+
+
+@router.post("/incidents/{incident_id}/investigate")
+async def investigate_incident(
+    incident_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Mark an ACTIVE incident as INVESTIGATING by an analyst."""
+    incident = _get_incident_or_404(db, incident_id)
+    if incident.status != incident_service.STATUS_ACTIVE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot investigate an incident in status '{incident.status}'",
+        )
+    incident.status = incident_service.STATUS_INVESTIGATING
+    incident.updated_at = datetime.utcnow()
+    incident_service.append_timeline(
+        incident,
+        "status_change",
+        f"Investigation started by {current_user.username}",
+        "",
     )
+    log_action(
+        db, current_user, "incident.investigate", "incident",
+        resource_id=str(incident.id),
+        details=f"Investigation started: {incident.title}",
+        ip=client_ip(request),
+    )
+    db.commit()
+    data = incident_service.serialize(db, incident)
+    await manager.broadcast({"type": "incident_updated", "data": data})
+    return data
+
+
+@router.post("/incidents/{incident_id}/resolve")
+async def resolve_incident(
+    incident_id: int,
+    payload: IncidentResolveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Resolve an incident with an analyst-provided reason. The employee is
+    returned to Safe (live risk 0) and the incident moves to history with its
+    full timeline preserved."""
+    incident = _get_incident_or_404(db, incident_id)
+    if incident.status == incident_service.STATUS_ARCHIVED:
+        raise HTTPException(status_code=400, detail="Archived incidents cannot be resolved")
+    incident_service.resolve_incident(db, incident, current_user.username, payload.reason)
+    log_action(
+        db, current_user, "incident.resolve", "incident",
+        resource_id=str(incident.id),
+        details=f"Resolved Incident / {payload.reason}",
+        ip=client_ip(request),
+    )
+    db.commit()
+    data = incident_service.serialize(db, incident)
+    await manager.broadcast({"type": "incident_resolved", "data": data})
+    return data
+
+
+@router.post("/incidents/{incident_id}/archive")
+async def archive_incident(
+    incident_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Move an incident into history (admin only)."""
+    incident = _get_incident_or_404(db, incident_id)
+    if incident.status == incident_service.STATUS_ARCHIVED:
+        raise HTTPException(status_code=400, detail="Incident is already archived")
+    incident_service.archive_incident(db, incident)
+    log_action(
+        db, current_user, "incident.archive", "incident",
+        resource_id=str(incident.id),
+        details=f"Archived incident: {incident.title}",
+        ip=client_ip(request),
+    )
+    db.commit()
+    data = incident_service.serialize(db, incident)
+    await manager.broadcast({"type": "incident_archived", "data": data})
+    return data
+
+
+@router.post("/employees/{employee_id}/reset-risk")
+async def reset_employee_risk(
+    employee_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Admin-only manual override: force an employee back to 0 / Safe. If an
+    ACTIVE incident exists it is resolved as a 'Manual Override' so the primary
+    displayed score follows the override. Audited via incident.reset_risk."""
+    employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    employee.risk_score = 0
+    employee.status = "Safe"
+    active = incident_service.get_active_incident(db, employee_id)
+    if active:
+        incident_service.resolve_incident(db, active, current_user.username, "Manual Override")
+
+    log_action(
+        db, current_user, "incident.reset_risk", "employee",
+        resource_id=str(employee_id),
+        details="Reset Risk / Manual Override",
+        ip=client_ip(request),
+    )
+    db.commit()
+
+    if active:
+        await manager.broadcast({
+            "type": "incident_resolved",
+            "data": incident_service.serialize(db, active),
+        })
+    return {
+        "message": "Employee risk reset",
+        "employee": {"id": employee.id, "risk_score": 0, "status": "Safe"},
+        "incident": incident_service.serialize(db, active) if active else None,
+    }
 
 
 # System Settings (persisted config that drives the risk engine)
@@ -1086,26 +1327,124 @@ def _render_report_html(report: dict) -> HTMLResponse:
 
 
 # ---------------------------------------------------------------------------
-# Endpoint agent (device registration + heartbeat) & remote commands
+# Endpoint agent (token-based enrollment, device registration & heartbeat)
+# & remote commands
 # ---------------------------------------------------------------------------
+@router.post("/agent/enroll")
+def agent_enroll(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Issue a one-time enrollment token for the logged-in employee's device.
+
+    Employee-only. The employee clicks "Connect This Device" on their profile,
+    the page calls this endpoint and downloads ``threatvista-agent-config.json``
+    containing the token + the backend URL (derived from the request the browser
+    already used — no manual IP/email typing).
+    """
+    if current_user.role != "employee":
+        raise HTTPException(status_code=403, detail="Only employees can enroll a device")
+    employee = resolve_employee_by_email(db, current_user.username)
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee profile not found for this account")
+
+    # The browser reached us at request.base_url (scheme + host + port). That is
+    # exactly the address the endpoint agent on the same LAN must use, so the
+    # employee never has to type a backend IP.
+    backend_url = str(request.base_url).rstrip("/")
+    data = create_enrollment_token(db, employee, backend_url)
+    log_action(
+        db, current_user, "agent.enroll", "employee",
+        resource_id=str(employee.id),
+        details=f"Enrollment token issued for {employee.email}",
+        ip=client_ip(request),
+    )
+    return data
+
+
 @router.post("/agent/register")
-def agent_register(
+async def agent_register(
     payload: AgentRegisterRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Register an endpoint agent's device for an employee.
+    """Register an endpoint agent's device.
 
-    Called once at agent startup. Resolves the employee by email, creates or
-    updates their Device profile, and returns the identity used for heartbeats.
+    Current flow: the agent presents the ``enrollment_token`` it read from
+    ``threatvista-agent-config.json``. The backend validates it (not expired /
+    not used / known), resolves the employee, registers/updates their Device and
+    consumes the token. Legacy flow (``employee_email``) is still accepted so
+    already-installed agents keep working. Broadcasts ``device_connected`` so
+    Dashboard / Employee page / Active Sessions update instantly.
     """
     if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid agent key")
+
+    info = payload.model_dump()
+    info.pop("enrollment_token", None)
+    info.pop("employee_email", None)
+
+    token_auth = False
     try:
-        result = register_device(db, payload.employee_email, payload.model_dump())
+        if payload.enrollment_token:
+            token_auth = True  # set before validation so rejected tokens -> 401
+            employee = validate_enrollment_token(db, payload.enrollment_token)
+        else:
+            employee = resolve_employee_by_email(db, payload.employee_email or "")
+            if employee is None:
+                raise ValueError(f"No employee found for email '{payload.employee_email}'")
+
+        result = register_device(db, employee.id, info)
+
+        # Only consume the token after the device actually registered, so a
+        # failed registration never burns an otherwise-valid token.
+        if token_auth:
+            consume_enrollment_token(db, payload.enrollment_token, device_id=result["device_id"])
+
+        # Live update: Dashboard, Employee page and Active Sessions all refresh
+        # on this broadcast so the device shows Online without a page reload.
+        device = get_device(db, employee.id)
+        await manager.broadcast({
+            "type": "device_connected",
+            "data": {
+                "device": device_to_dict(device),
+                "employee": {"id": employee.id, "name": employee.name},
+            },
+        })
+        return {"registered": True, **result}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return {"registered": True, **result}
+        # Token failures (unknown / used / expired) are authentication failures
+        # -> 401. Legacy email failures stay 404 for backward compatibility.
+        raise HTTPException(
+            status_code=401 if token_auth else 404,
+            detail=str(exc),
+        )
+
+
+@router.get("/agent/status")
+def agent_status(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Current device status for the logged-in employee (employee-only).
+
+    Lets the employee profile page render "This Device / Status: Online or
+    Disconnected" without needing SOC-only employee endpoints.
+    """
+    if current_user.role != "employee":
+        raise HTTPException(status_code=403, detail="Only employees can query their device status")
+    employee = resolve_employee_by_email(db, current_user.username)
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee profile not found for this account")
+    device = get_device(db, employee.id)
+    return {
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "employee_email": employee.email,
+        "device": device_to_dict(device),
+        "online": is_online(device),
+    }
 
 
 @router.post("/agent/heartbeat")

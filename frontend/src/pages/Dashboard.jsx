@@ -13,6 +13,7 @@ import { ResponsiveContainer, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGri
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
 import { formatIST, formatISTClock, toISTDate } from '../utils/time';
+import IncidentCard from '../components/IncidentCard';
 
 const LIVE_WINDOW_MINUTES = 15;
 
@@ -50,6 +51,7 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState([]);
   const [recentEvents, setRecentEvents] = useState([]);
   const [liveEvents, setLiveEvents] = useState([]);
+  const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   const [aiScores, setAiScores] = useState({});
@@ -62,6 +64,46 @@ export default function Dashboard() {
       setLiveEvents(prev => [message.data, ...prev].slice(0, 200));
     } else if (message.type === 'new_alert') {
       setAlerts(prev => [message.data, ...prev].slice(0, 3));
+    } else if (message.type === 'incident_created') {
+      setIncidents(prev => [message.data, ...prev.filter(i => i.id !== message.data.id)].slice(0, 20));
+    } else if (message.type === 'incident_updated' || message.type === 'incident_resolved' || message.type === 'incident_archived') {
+      setIncidents(prev => prev.map(i => (i.id === message.data.id ? message.data : i)));
+    } else if (message.type === 'device_connected') {
+      // A new endpoint enrolled — refresh stats / rankings / incidents live so
+      // the device shows Online without a manual reload.
+      Promise.all([api.getStats(), api.getEmployees(), api.getIncidents()])
+        .then(([statsData, empsData, incidentsData]) => {
+          setStats(statsData);
+          setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
+          setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
+        })
+        .catch((err) => console.error('Failed to refresh dashboard on device_connected', err));
+    } else if (message.type === 'batch_event') {
+      const d = message.data || {};
+      // Prefer the persistent incident lifecycle changes attached to the batch;
+      // fall back to the legacy burst-summary card for older agents/broadcasts.
+      const changes = d.incident_changes || [];
+      if (changes.length) {
+        for (const ch of changes) {
+          const inc = ch.incident;
+          if (ch.event_type === 'incident_created') {
+            setIncidents(prev => [inc, ...prev.filter(i => i.id !== inc.id)].slice(0, 20));
+          } else {
+            setIncidents(prev => prev.map(i => (i.id === inc.id ? inc : i)));
+          }
+        }
+      } else if (d.summary) {
+        setIncidents(prev => [d, ...prev].slice(0, 20));
+      }
+      // Keep the chart + raw metadata stream live with the batch's raw events.
+      const evs = d.events || [];
+      if (evs.length) {
+        setLiveEvents(prev => [...evs, ...prev].slice(0, 200));
+        setRecentEvents(prev => [...evs, ...prev].slice(0, 10));
+      }
+      if (d.alerts && d.alerts.length) {
+        setAlerts(prev => [...d.alerts, ...prev].slice(0, 3));
+      }
     }
   });
 
@@ -83,20 +125,26 @@ export default function Dashboard() {
     loadAI();
   }, [employees]);
 
+  const primaryRisk = (emp) => (emp.incident?.risk_score ?? emp.risk_score);
+
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
-        const statsData = await api.getStats();
-        const empsData = await api.getEmployees();
-        const alertsData = await api.getAlerts();
-        const eventsData = await api.getEvents(null, 50);
+        const [statsData, empsData, alertsData, eventsData, incidentsData] = await Promise.all([
+          api.getStats(),
+          api.getEmployees(),
+          api.getAlerts(),
+          api.getEvents(null, 50),
+          api.getIncidents(),
+        ]);
 
         setStats(statsData);
-        setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
+        setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
         setAlerts(alertsData.slice(0, 3));
         setRecentEvents((eventsData || []).slice(0, 10));
         setLiveEvents(eventsData || []);
+        setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
       } catch (err) {
         console.error("Failed to load dashboard data", err);
       } finally {
@@ -112,16 +160,18 @@ export default function Dashboard() {
   useEffect(() => {
     async function refresh() {
       try {
-        const [statsData, empsData, alertsData, eventsData] = await Promise.all([
+        const [statsData, empsData, alertsData, eventsData, incidentsData] = await Promise.all([
           api.getStats(),
           api.getEmployees(),
           api.getAlerts(),
           api.getEvents(null, 50),
+          api.getIncidents(),
         ]);
         setStats(statsData);
-        setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
+        setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
         setAlerts(alertsData.slice(0, 3));
         setLiveEvents(eventsData || []);
+        setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
       } catch (err) {
         console.error("Failed to refresh dashboard", err);
       }
@@ -267,6 +317,37 @@ export default function Dashboard() {
       <div className="p-6 glass-panel">
         <div className="flex justify-between items-center mb-6">
           <div>
+            <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Active Incidents</h4>
+            <p className="text-xs text-cyber-muted">Persistent incident state — stays open until an analyst resolves or archives it</p>
+          </div>
+          <span className="flex items-center gap-1.5 text-[10px] bg-cyber-primary/10 border border-cyber-primary/25 text-cyber-primary px-2.5 py-1 rounded font-mono font-bold">
+            {incidents.length} INCIDENT{incidents.length === 1 ? '' : 'S'}
+          </span>
+        </div>
+        {incidents.length === 0 ? (
+          <div className="text-center py-12 text-cyber-muted text-xs font-mono">
+            <ShieldAlert className="h-8 w-8 text-cyber-muted mx-auto mb-2" />
+            NO ACTIVE INCIDENTS — monitoring is clear
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {incidents.map((inc) => (
+              <IncidentCard
+                key={inc.id ?? `${inc.timestamp}-${inc.employee_id}-${inc.total_events}`}
+                incident={inc}
+                onChange={() => {
+                  // Actions resolve/archive server-side; the 15s refresh keeps
+                  // the panel in sync with the authoritative incident list.
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="p-6 glass-panel">
+        <div className="flex justify-between items-center mb-6">
+          <div>
             <h4 className="text-sm font-bold tracking-wide uppercase font-mono">Monitored Employee Rankings</h4>
             <p className="text-xs text-cyber-muted">Overview of active employees sorted by risk score</p>
           </div>
@@ -292,8 +373,10 @@ export default function Dashboard() {
             <tbody className="divide-y divide-cyber-border">
               {employees.slice(0, 4).map((emp) => {
                 const ai = aiScores[emp.id];
-                const riskScore = ai ? ai.risk_score : emp.risk_score;
+                const incident = emp.incident || null;
+                const riskScore = incident ? incident.risk_score : (ai ? ai.risk_score : emp.risk_score);
                 const status = ai ? ai.status : emp.status;
+                const hasIncident = !!incident;
                 return (
                   <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
                     <td className="py-3.5 pl-4 flex items-center gap-3">
@@ -304,6 +387,9 @@ export default function Dashboard() {
                         <span className="font-semibold text-cyber-text block flex items-center gap-1.5">
                           <span className={`inline-block h-1.5 w-1.5 rounded-full ${emp.online ? 'bg-cyber-success' : 'bg-cyber-danger'}`}></span>
                           {emp.name}
+                          {hasIncident && (
+                            <span className="text-sm" title={`Active incident: ${incident.title}`}>🚨</span>
+                          )}
                         </span>
                         <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
                       </div>
@@ -312,10 +398,10 @@ export default function Dashboard() {
                     <td className="py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="w-24 bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className={`h-full ${
-                              riskScore > 75 ? 'bg-cyber-danger' : 
-                              riskScore > 50 ? 'bg-cyber-warning' : 
+                              riskScore > 75 ? 'bg-cyber-danger' :
+                              riskScore > 50 ? 'bg-cyber-warning' :
                               'bg-cyber-success'
                             }`}
                             style={{ width: `${riskScore}%` }}
@@ -330,7 +416,7 @@ export default function Dashboard() {
                         status === 'Medium' || status === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
                         'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
                       }`}>
-                        {status}
+                        {hasIncident ? incident.severity : status}
                       </span>
                     </td>
                     <td className="py-3.5 text-right pr-4">

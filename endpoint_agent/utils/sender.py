@@ -26,26 +26,46 @@ def _headers():
         headers["X-Agent-Key"] = AGENT_KEY
     return headers
 
+def _build_event_payload(event_data: dict) -> dict:
+    return {
+        "employee_id": event_data.get("employee_id", 1),
+        "timestamp": event_data.get("timestamp", datetime.utcnow().isoformat()),
+        "event_type": event_data.get("event_type"),
+        "filename": event_data.get("filename"),
+        "extension": event_data.get("extension"),
+        "size": event_data.get("size"),
+        "folder": event_data.get("folder"),
+        "usb_status": event_data.get("usb_status"),
+        "network_upload": event_data.get("network_upload"),
+        "cpu_usage": event_data.get("cpu_usage"),
+        "ram_usage": event_data.get("ram_usage"),
+        "details": event_data.get("details")
+    }
+
+
 def send_event(event_data: dict):
     try:
-        payload = {
-            "employee_id": event_data.get("employee_id", 1),
-            "timestamp": event_data.get("timestamp", datetime.utcnow().isoformat()),
-            "event_type": event_data.get("event_type"),
-            "filename": event_data.get("filename"),
-            "extension": event_data.get("extension"),
-            "size": event_data.get("size"),
-            "folder": event_data.get("folder"),
-            "usb_status": event_data.get("usb_status"),
-            "network_upload": event_data.get("network_upload"),
-            "cpu_usage": event_data.get("cpu_usage"),
-            "ram_usage": event_data.get("ram_usage"),
-            "details": event_data.get("details")
-        }
+        payload = _build_event_payload(event_data)
         response = requests.post(f"{API_BASE_URL}/events", json=payload, headers=_headers(), timeout=5)
         return response.status_code == 200
     except Exception as e:
         print(f"Failed to send event: {e}")
+        return False
+
+
+def send_event_batch(events: list):
+    """Send a whole agent batch as ONE bulk-ingest request.
+
+    ``events`` is the raw list of telemetry dicts collected by the batcher; the
+    backend inserts them all in a single transaction and broadcasts one
+    consolidated WebSocket message.
+    """
+    try:
+        payload = {"events": [_build_event_payload(evt) for evt in events]}
+        response = requests.post(f"{API_BASE_URL}/events/batch", json=payload, headers=_headers(), timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Failed to send event batch ({len(events)} events): {e}")
         return False
 
 def check_backend_health():
@@ -56,12 +76,28 @@ def check_backend_health():
         return False
 
 
-def register_device(employee_email: str, device_info: dict):
-    """Register this machine's device for the employee.
+def register_device_with_token(enrollment_token: str, device_info: dict):
+    """Register this machine's device using a one-time enrollment token.
 
     Returns ``(result, err)`` where ``result`` is the backend's full response
-    dict (``{registered, employee_id, device_id}``) so the agent can attach the
-    *correct* employee identity to every subsequent event.
+    dict (``{registered, employee_id, device_id, employee_name}``) so the agent
+    can attach the *correct* employee identity to every subsequent event. The
+    backend validates the token (10-min expiry, single use) and consumes it.
+    """
+    payload = {"enrollment_token": enrollment_token, **device_info}
+    try:
+        response = requests.post(f"{API_BASE_URL}/agent/register", json=payload, headers=_headers(), timeout=10)
+        if response.status_code == 200:
+            return response.json(), None
+        return None, response.json().get("detail", f"register failed ({response.status_code})")
+    except Exception as exc:
+        return None, str(exc)
+
+
+def register_device(employee_email: str, device_info: dict):
+    """Legacy email-based registration (kept for already-installed agents).
+
+    Returns ``(result, err)`` like ``register_device_with_token``.
     """
     payload = {"employee_email": employee_email, **device_info}
     try:

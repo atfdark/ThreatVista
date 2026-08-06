@@ -18,31 +18,46 @@ Employee PC ──► Agent (this directory) ──► FastAPI Backend ──►
 
 ## How identity works
 
-On startup the agent:
+There is **no manual email** anymore. An employee enrolls this laptop through
+the ThreatVista web portal, then runs the agent — it wires itself up.
 
-1. Reads **`AGENT_EMPLOYEE_EMAIL`** (which employee this machine belongs to).
-2. Collects a **device profile** — hostname, OS version/build, CPU model/cores,
-   RAM, disk, local IP, agent version (`get_device_info()`).
-3. Calls **`POST /api/agent/register`** — the backend resolves the employee by
-   email and creates/updates their `Device` profile, returning a `device_id`.
-4. Starts a **heartbeat loop** — sends `POST /api/agent/heartbeat` every
+1. The employee logs in to ThreatVista, opens their profile and clicks
+   **Connect This Device**. The page calls `POST /api/agent/enroll`, which
+   issues a **one-time enrollment token** (random UUID, expires in 10 minutes)
+   and downloads `threatvista-agent-config.json` (`{"token", "backend_url"}`).
+2. The employee double-clicks **`start_agent.bat`** (no arguments). The agent
+   reads the config file, collects a **device profile** (hostname, OS, CPU, RAM,
+   disk, local IP, agent version) and calls **`POST /api/agent/register`** with
+   `enrollment_token`.
+3. The backend validates the token (not expired / not used), resolves the
+   employee, registers/updates their `Device`, **consumes the token** and
+   broadcasts `device_connected` over WebSocket so the dashboard updates
+   instantly. The agent deletes the config file after success.
+4. The agent saves its resolved identity (`threatvista-agent-device.json`), so
+   the **next run reconnects to the same device** — no duplicate registration,
+   no re-enrollment.
+5. A **heartbeat loop** sends `POST /api/agent/heartbeat` every
    `AGENT_HEARTBEAT_SECONDS` (default 30s) so the dashboard marks the endpoint
-   **online**. Without a heartbeat for ~90s the endpoint shows **offline**.
-5. Every monitored action is sent as an event with the resolved `employee_id`.
+   **online**. Without a heartbeat for ~180s the endpoint shows **offline**.
+6. Every monitored action is sent as an event with the resolved `employee_id`.
 
 ## Configuration (environment variables)
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `AGENT_EMPLOYEE_EMAIL` | Employee this machine belongs to | `rahul.sharma@threatvista.com` |
 | `AGENT_HEARTBEAT_SECONDS` | Heartbeat interval | `30` |
 | `THREATVISTA_AGENT_KEY` | Shared secret (if the backend requires `X-Agent-Key`) | *(empty)* |
+
+The backend URL and enrollment token come from
+`threatvista-agent-config.json`, not environment variables.
 
 ## Running
 
 ```bash
-# From the project root, with the backend already running:
+# From the project root, with the backend already running AND a config file
+# downloaded from the employee profile page:
 python endpoint_agent/agent.py
+# ...or simply double-click start_agent.bat (installs deps + launches it).
 ```
 
 ## Monitors
@@ -57,8 +72,12 @@ python endpoint_agent/agent.py
 ## Known limitations
 
 - **No offline queue** — events POST directly; if the backend is unreachable the
-  event is dropped (logged). A local SQLite buffer is future work.
+  agent exits and asks you to start the backend. A local SQLite buffer is future
+  work.
+- **Enrollment requires the web portal** — if the config file is missing or its
+  token expired, the agent prints instructions and exits (it never falls back to
+  a guessed employee).
 - **Network-upload monitor** — `get_network_connections()` helper exists but is
   not yet wired into the event stream.
-- **Single employee per agent** — each agent belongs to one employee (the email
-  in config).
+- **Single employee per agent** — each agent belongs to the employee who
+  enrolled it.

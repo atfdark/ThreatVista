@@ -78,6 +78,50 @@ export const MOCK_ALERTS = [
   }
 ];
 
+export const MOCK_INCIDENTS = [
+  {
+    id: 1,
+    employee_id: 1,
+    employee: { id: 1, name: "Rahul Sharma" },
+    title: "Mass File Activity (150 events)",
+    severity: "High",
+    status: "ACTIVE",
+    risk_score: 72,
+    confidence: 88,
+    created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    resolved_at: null,
+    resolved_by: null,
+    resolution_reason: null,
+    active: true,
+    timeline: [
+      { ts: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), type: "created", title: "Incident created", detail: "Mass File Activity (150 events)" },
+      { ts: new Date(Date.now() - 90 * 60 * 1000).toISOString(), type: "evidence", title: "Mass File Activity (150 events)", detail: "150 file_create events in a burst" },
+      { ts: new Date(Date.now() - 60 * 60 * 1000).toISOString(), type: "risk_increase", title: "Risk increased: 65 → 72", detail: "" }
+    ]
+  },
+  {
+    id: 2,
+    employee_id: 2,
+    employee: { id: 2, name: "Amit Verma" },
+    title: "Unusual Network Upload",
+    severity: "Medium",
+    status: "RESOLVED",
+    risk_score: 63,
+    confidence: 74,
+    created_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
+    resolved_at: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(),
+    resolved_by: "admin",
+    resolution_reason: "False Positive",
+    active: false,
+    timeline: [
+      { ts: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(), type: "created", title: "Incident created", detail: "Unusual Network Upload" },
+      { ts: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString(), type: "resolved", title: "Incident resolved by admin", detail: "False Positive" }
+    ]
+  }
+];
+
 export const MOCK_EMPLOYEE_DETAILS = {
   1: {
     id: 1,
@@ -387,6 +431,45 @@ export const api = {
     return res.data;
   },
 
+  // --- Incidents (persistent lifecycle; admin actions audited) ---
+  getIncidents: async (params = {}) => {
+    try {
+      const res = await http.get(`/incidents`, { params });
+      return res.data;
+    } catch {
+      return MOCK_INCIDENTS;
+    }
+  },
+
+  getIncidentDetail: async (incidentId) => {
+    try {
+      const res = await http.get(`/incidents/${incidentId}`);
+      return res.data;
+    } catch {
+      return MOCK_INCIDENTS.find((i) => i.id === incidentId) || MOCK_INCIDENTS[0];
+    }
+  },
+
+  investigateIncident: async (incidentId) => {
+    const res = await http.post(`/incidents/${incidentId}/investigate`);
+    return res.data;
+  },
+
+  resolveIncident: async (incidentId, reason) => {
+    const res = await http.post(`/incidents/${incidentId}/resolve`, { reason });
+    return res.data;
+  },
+
+  archiveIncident: async (incidentId) => {
+    const res = await http.post(`/incidents/${incidentId}/archive`);
+    return res.data;
+  },
+
+  resetEmployeeRisk: async (employeeId) => {
+    const res = await http.post(`/employees/${employeeId}/reset-risk`);
+    return res.data;
+  },
+
   // --- Auth / sessions (backend-revoked logout) ---
   logout: async () => {
     try {
@@ -455,6 +538,19 @@ export const api = {
 
   sendHeartbeat: async (deviceId, metrics) => {
     const res = await http.post(`/agent/heartbeat`, { device_id: deviceId, ...metrics });
+    return res.data;
+  },
+
+  // --- EDR: employee self-enrollment (token-based, no email) ---
+  // Issues a one-time enrollment token for the logged-in employee's device.
+  enrollDevice: async () => {
+    const res = await http.post(`/agent/enroll`);
+    return res.data;
+  },
+
+  // Current device status for the logged-in employee (My Profile page).
+  getAgentStatus: async () => {
+    const res = await http.get(`/agent/status`);
     return res.data;
   },
 

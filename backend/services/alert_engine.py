@@ -65,3 +65,70 @@ class RuleBasedAlertEngine:
                     alerts_created.append(alert)
 
         return alerts_created if alerts_created else None
+
+    @staticmethod
+    def evaluate_batch(db: Session, events: list) -> Optional[list]:
+        """Evaluate a whole event batch as one unit and emit at most one alert
+        per trigger.
+
+        Runs after a bulk ingest so a 150-file burst produces a handful of
+        aggregated alerts instead of 150 near-identical rows. Adds the alerts to
+        the session but does NOT commit — the batch endpoint commits once.
+        """
+        if not events:
+            return None
+
+        alerts_created = []
+        reasons_seen = set()
+
+        # USB inserted in this batch.
+        usb_inserts = [e for e in events if e.event_type == "usb_insert"]
+        if usb_inserts:
+            device = usb_inserts[0].usb_status or "Unknown device"
+            reason = f"USB device inserted: {device}"
+            if reason not in reasons_seen:
+                reasons_seen.add(reason)
+                alerts_created.append(Alert(
+                    employee_id=usb_inserts[0].employee_id,
+                    severity="Medium",
+                    reason=reason,
+                    status="Active",
+                    timestamp=datetime.utcnow(),
+                ))
+
+        # Out-of-office login / process activity in this batch (IST-aware, same
+        # timezone shift the single-event rules and ai/features.py use).
+        outside = False
+        for e in events:
+            if e.event_type in ("login", "process_start") and e.timestamp:
+                local = e.timestamp + timedelta(hours=TIMEZONE_OFFSET_HOURS)
+                if local.hour < RuleBasedAlertEngine.OFFICE_HOURS_START or local.hour >= RuleBasedAlertEngine.OFFICE_HOURS_END:
+                    outside = True
+                    break
+        if outside:
+            reason = "Activity detected outside office hours"
+            if reason not in reasons_seen:
+                reasons_seen.add(reason)
+                alerts_created.append(Alert(
+                    employee_id=events[0].employee_id,
+                    severity="Medium",
+                    reason=reason,
+                    status="Active",
+                    timestamp=datetime.utcnow(),
+                ))
+
+        # Mass file operations in a single batch.
+        file_ops = [e for e in events if e.event_type.startswith("file_")]
+        if len(file_ops) > RuleBasedAlertEngine.HIGH_FILE_COPY_THRESHOLD:
+            reason = f"Mass file operations detected: {len(file_ops)} in one batch"
+            if reason not in reasons_seen:
+                reasons_seen.add(reason)
+                alerts_created.append(Alert(
+                    employee_id=file_ops[0].employee_id,
+                    severity="High",
+                    reason=reason,
+                    status="Active",
+                    timestamp=datetime.utcnow(),
+                ))
+
+        return alerts_created if alerts_created else None

@@ -40,10 +40,13 @@ export default function ActiveSessions() {
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
 
-  // Live telemetry: prepend each new event from the backend WebSocket.
+  // Live telemetry: prepend each new event from the backend WebSocket. When a
+  // device registers, refetch endpoints so it appears Online immediately.
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
       setEvents(prev => [message.data, ...prev].slice(0, 100));
+    } else if (message.type === 'device_connected') {
+      api.getEndpoints().then(eps => setEndpoints(eps || [])).catch(() => {});
     }
   });
 

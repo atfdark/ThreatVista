@@ -1,7 +1,22 @@
 from typing import List, Dict
 from datetime import datetime, timedelta
+from collections import defaultdict
 
 class CorrelationEngine:
+    # A batch of file operations is treated as a burst incident once it exceeds
+    # this many events of the same type within one ~1s agent batch.
+    BURST_THRESHOLD = 50
+
+    # Human-facing identity for each burstable file-op event type.
+    BURST_TYPES = {
+        "file_create": {"title": "Mass File Activity", "icon": "📁"},
+        "file_delete": {"title": "Mass File Deletion", "icon": "🗑️"},
+        "file_copy": {"title": "Mass File Copy", "icon": "📋"},
+        "file_modify": {"title": "Mass File Modification", "icon": "✏️"},
+        "file_rename": {"title": "Mass File Rename", "icon": "📝"},
+        "file_move": {"title": "Mass File Move", "icon": "📂"},
+    }
+
     def __init__(self):
         self.rules = [
             self._rule_usb_mass_copy,
@@ -19,6 +34,75 @@ class CorrelationEngine:
             if res:
                 incidents.append(res)
         return incidents
+
+    def analyze_batch(self, events: List[dict]) -> List[dict]:
+        """Detect burst incidents inside one agent batch.
+
+        Groups the batch's file operations by type and, for any type hitting
+        ``BURST_THRESHOLD`` events, emits a single consolidated incident summary
+        (count, folder, duration, severity) instead of one UI update per event.
+        """
+        buckets = defaultdict(list)
+        for evt in events:
+            if evt.get("event_type") in self.BURST_TYPES:
+                buckets[evt.get("event_type")].append(evt)
+
+        incidents = []
+        for event_type, evts in buckets.items():
+            count = len(evts)
+            if count < self.BURST_THRESHOLD:
+                continue
+            meta = self.BURST_TYPES[event_type]
+            folder = self._most_common_folder(evts)
+            duration = self._span_seconds(evts)
+            severity, boost = self._severity_for(count)
+            incidents.append({
+                "name": meta["title"],
+                "icon": meta["icon"],
+                "event_type": event_type,
+                "severity": severity,
+                "count": count,
+                "folder": folder,
+                "duration_seconds": round(duration, 1),
+                "score_boost": boost,
+                "reason": f"{meta['title']} detected: {count} file operations in {duration:.1f}s.",
+            })
+
+        incidents.sort(key=lambda i: i["count"], reverse=True)
+        return incidents
+
+    @staticmethod
+    def _most_common_folder(events):
+        counts = defaultdict(int)
+        for e in events:
+            f = e.get("folder")
+            if f:
+                counts[f] += 1
+        return max(counts, key=counts.get) if counts else None
+
+    @staticmethod
+    def _span_seconds(events):
+        """Duration between the first and last timestamp in seconds."""
+        times = []
+        for e in events:
+            ts = e.get("timestamp")
+            try:
+                t = datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+                times.append(t)
+            except Exception:
+                continue
+        if len(times) < 2:
+            return 0.0
+        span = (max(times) - min(times)).total_seconds()
+        return max(span, 0.1)  # never claim zero duration for an instant burst
+
+    @staticmethod
+    def _severity_for(count):
+        if count >= 150:
+            return "High", 25
+        if count >= 100:
+            return "High", 20
+        return "Medium", 15
 
     def _rule_usb_mass_copy(self, events, features):
         usb = [e for e in events if e.get("event_type") == "usb_insert"]
