@@ -232,6 +232,22 @@ class RemoteCommand(Base):
     employee = relationship("Employee", back_populates="commands")
 
 
+class SeedState(Base):
+    """Single-row marker for how the database was seeded.
+
+    ``init_db()`` is idempotent. After a reset it either seeds the demo dataset
+    (mode="demo") or, when ``THREATVISTA_SEED_DEMO=0`` / ``reset_db.py --empty``,
+    only the role accounts + config (mode="empty") so the SOC shows *only* the
+    employees that self-register. This row is what stops an empty seed from
+    being re-populated with demo data on the next ``init_db()`` call.
+    """
+    __tablename__ = "seed_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    mode = Column(String, default="demo")  # "demo" | "empty"
+    seeded_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Incident(Base):
     """A persistent security incident attached to one employee.
 

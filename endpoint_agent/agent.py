@@ -76,9 +76,21 @@ class EndpointAgent:
             device_info = get_device_info()
             result, err = register_device_with_token(ENROLLMENT["token"], device_info)
             if err:
-                print(f"[!] Device registration failed: {err}")
-                print("    The token may have expired (10 minutes) or already been used.")
-                print("    Log in to ThreatVista again and click 'Connect This Device' to get a fresh one.")
+                # The token was rejected (expired / already used / unknown).
+                # Drop the stale file so it stops failing, then — if this laptop
+                # was already enrolled — just reconnect instead of asking the
+                # employee to click "Connect This Device" again.
+                print(f"[!] Enrollment token rejected: {err}")
+                enrollment.delete_enrollment_config(ENROLLMENT)
+                if DEVICE_IDENTITY:
+                    self.device_id = DEVICE_IDENTITY["device_id"]
+                    self.employee_id = DEVICE_IDENTITY["employee_id"]
+                    print(f"[+] This laptop is already enrolled — reconnecting to device {self.device_id} "
+                          f"(employee #{self.employee_id}).")
+                    print("    You do NOT need to click 'Connect This Device' again.")
+                    return True
+                print("    Get a fresh token: log in to ThreatVista, open your profile, click")
+                print("    'Connect This Device', then run start_agent.bat again.")
                 return False
             self.device_id = result.get("device_id")
             self.employee_id = result.get("employee_id")
@@ -110,6 +122,8 @@ class EndpointAgent:
             else (DEVICE_IDENTITY or {}).get("backend_url", "?")
         )
         print(f"[*] ThreatVista Endpoint Agent starting (backend: {backend_label})")
+        if ENROLLMENT:
+            print(f"[*] Found enrollment config at: {ENROLLMENT['path']}")
 
         if not (ENROLLMENT or DEVICE_IDENTITY):
             print("[!] This laptop is not enrolled yet.")

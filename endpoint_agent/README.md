@@ -64,10 +64,11 @@ python endpoint_agent/agent.py
 
 | Monitor | Library | Emits |
 |---------|---------|-------|
-| `file_monitor.py` | watchdog | file created / moved / renamed / deleted |
-| `usb_monitor.py` | WMI / pywin32 (Windows) | USB insert / remove |
+| `file_monitor.py` | watchdog | file + **folder** created / moved / deleted; watches the **OneDrive-redirected** Desktop / Documents / Downloads (so files on a redirected desktop are seen) |
+| `usb_monitor.py` | ctypes (Windows API polling) | USB insert / remove |
 | `process_monitor.py` | psutil | process start / stop |
 | `system_monitor.py` | psutil | system_metrics (CPU/RAM/disk) + device profile + heartbeats |
+| `network_monitor.py` | psutil | network upload **spikes** (rolling baseline; routine cloud sync does NOT alarm) |
 
 ## Known limitations
 
@@ -75,9 +76,10 @@ python endpoint_agent/agent.py
   agent exits and asks you to start the backend. A local SQLite buffer is future
   work.
 - **Enrollment requires the web portal** — if the config file is missing or its
-  token expired, the agent prints instructions and exits (it never falls back to
-  a guessed employee).
-- **Network-upload monitor** — `get_network_connections()` helper exists but is
-  not yet wired into the event stream.
+  token expired, the agent falls back to the saved device identity (no
+  re-enrollment) when one exists; otherwise it prints instructions and exits.
+- **Network-upload monitor** — machine-wide counters can't attribute traffic to
+  a process; the monitor uses a rolling baseline so routine cloud sync is not
+  flagged, but genuinely large sustained exfiltration is.
 - **Single employee per agent** — each agent belongs to the employee who
   enrolled it.

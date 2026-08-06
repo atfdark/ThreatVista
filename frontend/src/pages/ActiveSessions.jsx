@@ -45,6 +45,11 @@ export default function ActiveSessions() {
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
       setEvents(prev => [message.data, ...prev].slice(0, 100));
+    } else if (message.type === 'batch_event') {
+      // Agent batches arrive in collection order — sort newest-first so the
+      // stream always shows the most recent event on top.
+      const evs = (message.data?.events || []).slice().sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      if (evs.length) setEvents(prev => [...evs, ...prev].slice(0, 100));
     } else if (message.type === 'device_connected') {
       api.getEndpoints().then(eps => setEndpoints(eps || [])).catch(() => {});
     }
@@ -276,7 +281,7 @@ export default function ActiveSessions() {
               </tr>
             </thead>
             <tbody className="divide-y divide-cyber-border/40 font-mono">
-              {events.slice(0, 20).map((evt, i) => {
+              {[...events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 20).map((evt, i) => {
                 const badge = eventBadge(evt.event_type);
                 return (
                   <tr key={evt.id || i} className="hover:bg-cyber-border/10">

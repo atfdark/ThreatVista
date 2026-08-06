@@ -1,129 +1,107 @@
+import ctypes
 import threading
-
-# Optional Windows-only dependencies. Import at module level so the agent can
-# degrade gracefully on non-Windows machines instead of crashing at startup.
-try:
-    import pythoncom
-    import wmi
-except ImportError:
-    pythoncom = None
-    wmi = None
+import time
 
 
 class USBMonitor:
-    """Event-driven USB insert/remove monitor.
+    """USB insert/remove monitor (polling, no WMI dependency).
 
-    Instead of polling for drives every few seconds (which either spams
-    ``usb_insert`` for already-connected drives or, when never scheduled,
-    reports nothing at all), two background daemon threads subscribe to WMI
-    *instance* events on ``Win32_LogicalDisk``:
+    The old implementation subscribed to WMI ``Win32_LogicalDisk`` instance
+    events, which are flaky on many Windows builds (some USB sticks only appear
+    as ``Win32_DiskDrive`` or need a ``Win32_VolumeChangeEvent`` subscription),
+    so drives frequently went undetected.
 
-      Thread                WMI event              Fires when
-      --------------------  ---------------------- -------------------------
-      usb-insert-watcher    __InstanceCreationEvent  a drive is plugged in
-      usb-remove-watcher    __InstanceDeletionEvent  a drive is ejected/pulled
+    This version polls the drive letters every ``POLL_SECONDS`` via the Win32
+    API (``GetLogicalDrives`` + ``GetDriveTypeW``) and diffs the removable-drive
+    set: a new letter is a ``usb_insert``, a vanished letter is a ``usb_remove``.
+    Drives already connected at startup form the baseline and are NOT reported,
+    so the SOC feed never spams the pre-existing stick.
 
-    WMI blocks until the OS fires the event, so there is zero CPU cost while
-    idle. Each watcher uses a 1-second timeout so ``stop()`` can exit cleanly.
-
-    The interface (``start()`` / ``stop()``) is identical to the old version,
-    so the endpoint agent needs no changes.
+    On non-Windows the scan returns empty and the monitor is a harmless no-op.
     """
 
-    # Only removable media (pen drives / card readers). Skips optical (5),
-    # local fixed (3) and network (4) disks so CD or drive-map activity doesn't
-    # spam the SOC feed.
-    REMOVABLE_DRIVE_TYPE = 2
+    POLL_SECONDS = 3
+    DRIVE_REMOVABLE = 2  # DRIVE_REMOVABLE
 
     def __init__(self, callback):
         self.callback = callback
         self._running = False
-        self._threads = []
+        self._thread = None
+        self._known = {}
 
     def start(self):
-        """Start the two WMI watcher threads.
-
-        Returns True when the watchers are running, False (after printing a
-        warning) when pywin32/WMI isn't available so the agent can continue
-        without USB monitoring.
-        """
-        if wmi is None or pythoncom is None:
-            print("[-] USB monitor not available: pywin32/WMI is not installed")
-            return False
-
+        """Start the polling thread. Always succeeds (no optional deps)."""
         self._running = True
-        for notification_type, action in (("creation", "insert"), ("deletion", "remove")):
-            thread = threading.Thread(
-                target=self._watcher_loop,
-                args=(notification_type, action),
-                name=f"usb-{action}-watcher",
-                daemon=True,
-            )
-            thread.start()
-            self._threads.append(thread)
-
-        print(f"[+] USB monitor started ({len(self._threads)} WMI watchers)")
+        self._known = self._scan()  # baseline — already-connected drives are skipped
+        self._thread = threading.Thread(target=self._loop, name="usb-poll", daemon=True)
+        self._thread.start()
+        print(f"[+] USB monitor started (polling every {self.POLL_SECONDS}s)")
         return True
 
-    def _watcher_loop(self, notification_type, action):
-        """Block on WMI events for one class of drive lifecycle event."""
-        pythoncom.CoInitialize()
+    def _scan(self):
+        """Return {drive_letter: description} for currently-connected removable drives."""
+        drives = {}
         try:
-            conn = wmi.WMI()
-            watcher = conn.Win32_LogicalDisk.watch_for(notification_type, delay_secs=1)
-            while self._running:
-                try:
-                    # 1-second timeout keeps this loop responsive to stop().
-                    event = watcher(1000)
-                except wmi.x_wmi_timed_out:
-                    pythoncom.PumpWaitingMessages()
-                    continue
-                except Exception as exc:
-                    print(f"[-] USB watcher ({action}) error: {exc}")
-                    break
-                if event is not None:
-                    self._emit(event, action)
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            for i in range(26):
+                if bitmask & (1 << i):
+                    letter = chr(ord("A") + i)
+                    root = f"{letter}:\\"
+                    if ctypes.windll.kernel32.GetDriveTypeW(root) == self.DRIVE_REMOVABLE:
+                        drives[letter] = self._describe(root)
         except Exception as exc:
-            print(f"[-] USB monitor ({action}) init error: {exc}")
-        finally:
-            pythoncom.CoUninitialize()
+            print(f"[-] USB scan error: {exc}")
+        return drives
 
-    def _emit(self, event, action):
-        """Convert a Win32_LogicalDisk event into a usb_insert/usb_remove payload."""
+    def _describe(self, root):
+        label = self._volume_label(root)
+        size = self._volume_size(root)
+        return f"{root} - {label} ({size})"
+
+    def _loop(self):
+        while self._running:
+            time.sleep(self.POLL_SECONDS)
+            try:
+                current = self._scan()
+                for letter in current:
+                    if letter not in self._known:
+                        self._emit("insert", letter, current[letter])
+                for letter in self._known:
+                    if letter not in current:
+                        self._emit("remove", letter, self._known[letter])
+                self._known = current
+            except Exception as exc:
+                print(f"[-] USB poll error: {exc}")
+
+    def _emit(self, action, letter, description):
+        self.callback({
+            "event_type": f"usb_{action}",  # usb_insert | usb_remove
+            "usb_status": description,
+            "details": f"USB drive {letter} {'inserted' if action == 'insert' else 'removed'}",
+        })
+
+    def _volume_label(self, root):
         try:
-            # wmi's watcher proxies the created/deleted disk directly, but a
-            # couple of versions keep it under TargetInstance — handle both.
-            disk = event
-            target = getattr(event, "TargetInstance", None)
-            if target is not None and getattr(target, "Caption", None):
-                disk = target
+            import win32api
+            return win32api.GetVolumeInformation(root)[0]
+        except Exception:
+            return "No Label"
 
-            drive_type = getattr(disk, "DriveType", None)
-            if drive_type is not None and drive_type != self.REMOVABLE_DRIVE_TYPE:
-                return  # not a pen drive (e.g. CD / local / network mount)
-
-            caption = getattr(disk, "Caption", None) or "USB"
-            volume = getattr(disk, "VolumeName", None) or "No Label"
-            size = self._format_size(getattr(disk, "Size", None))
-
-            self.callback({
-                "event_type": f"usb_{action}",  # usb_insert | usb_remove
-                "usb_status": f"{caption} - {volume} ({size})",
-                "details": f"USB drive {caption} {'inserted' if action == 'insert' else 'removed'}",
-            })
-        except Exception as exc:
-            print(f"[-] USB event emit error: {exc}")
-
-    def _format_size(self, size_bytes):
+    def _volume_size(self, root):
         try:
-            size = int(size_bytes) if size_bytes else 0
-            return f"{size / (1024**3):.1f}GB"
+            free = ctypes.c_ulonglong()
+            total = ctypes.c_ulonglong()
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                root, None, ctypes.byref(total), ctypes.byref(free)
+            )
+            gb = total.value / (1024 ** 3)
+            return f"{gb:.1f}GB"
         except Exception:
             return "Unknown"
 
     def stop(self):
-        """Signal both watcher threads to exit and wait for them."""
+        """Signal the polling thread to exit and wait for it."""
         self._running = False
-        for thread in self._threads:
-            thread.join(timeout=2)
-        self._threads = []
+        if self._thread:
+            self._thread.join(timeout=2)
+        self._thread = None

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from backend.database.connection import engine, Base, SessionLocal
-from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile, SystemConfig, Device
+from backend.models.database import User, Employee, Event, Alert, RiskScore, BehaviorProfile, SystemConfig, Device, SeedState
 from backend.auth import hash_password, verify_password
 
 def ensure_admin_hash(db):
@@ -19,6 +19,14 @@ def ensure_admin_hash(db):
             print("[+] Migrated admin password hash to bcrypt.")
         except Exception as e:
             print(f"[!] Could not migrate admin hash: {e}")
+
+
+def ensure_admin(db):
+    """Ensure the 'admin' account exists (needed even in empty-seed mode)."""
+    if db.query(User).filter(User.username == "admin").first() is None:
+        db.add(User(username="admin", password_hash=hash_password("admin123"), role="admin"))
+        db.commit()
+        print("[+] Seeded 'admin' account.")
 
 
 def ensure_analyst(db):
@@ -47,30 +55,43 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     print("Tables created successfully.")
 
+    # THREATVISTA_SEED_DEMO=0 (or `reset_db.py --empty`) seeds only the role
+    # accounts + system config — no mock employees/devices/events — so the SOC
+    # shows *only* the employees that self-register and their real telemetry.
+    seed_demo = os.environ.get("THREATVISTA_SEED_DEMO", "1").strip().lower() not in ("0", "false", "no")
+
     db = SessionLocal()
     try:
         # Idempotency: always ensure config, valid admin hash, and demo roles exist.
         ensure_system_config(db)
+        ensure_admin(db)
         ensure_admin_hash(db)
         ensure_analyst(db)
         ensure_auditor(db)
 
-        # Check if core dataset is already seeded (employees, not just users —
-        # the demo role accounts above are always ensured).
+        # The SeedState marker stops an empty seed from being re-populated with
+        # demo data on a later init_db() call.
+        state = db.query(SeedState).first()
+        if state is not None:
+            print(f"Database already seeded (mode='{state.mode}'). Skipping seeding.")
+            return
+        # Legacy DBs seeded before SeedState existed: no marker, but employees exist.
         if db.query(Employee).first() is not None:
+            db.add(SeedState(mode="demo"))
+            db.commit()
             print("Database already contains data. Skipping seeding.")
+            return
+
+        if not seed_demo:
+            db.add(SeedState(mode="empty"))
+            db.commit()
+            print("Empty-seed mode: no mock employees/devices/events. Only real registered data will show.")
             return
 
         print("Seeding database with initial mock data...")
 
-        # 1. Admin Users
-        admin = User(
-            username="admin",
-            password_hash=hash_password("admin123"),
-            role="admin"
-        )
-        db.add(admin)
-        # NOTE: the 'analyst' demo account is ensured separately (ensure_analyst).
+        # 1. Role accounts (admin/analyst/auditor) are ensured above via
+        #    ensure_admin / ensure_analyst / ensure_auditor.
 
         # 2. Employees
         rahul = Employee(
@@ -321,6 +342,7 @@ def init_db():
             )
         ])
 
+        db.add(SeedState(mode="demo"))
         db.commit()
         print("Mock data seeded successfully!")
 

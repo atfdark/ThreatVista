@@ -6,6 +6,31 @@ import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileDeletedEvent, FileModifiedEvent, FileMovedEvent
 
+def get_user_dirs():
+    """Resolve the REAL Desktop/Documents/Downloads paths.
+
+    On Windows with OneDrive folder redirection (very common), ``~/Desktop``
+    resolves to ``C:\\Users\\<user>\\Desktop`` but the files actually live under
+    ``C:\\Users\\<user>\\OneDrive\\Desktop`` — so a monitor watching only the
+    non-OneDrive path silently sees nothing. Prefer the OneDrive copy when it
+    exists, falling back to the plain path, and dedupe.
+    """
+    base = os.path.expanduser("~")
+    groups = {
+        "Desktop": [os.path.join(base, "OneDrive", "Desktop"), os.path.join(base, "Desktop")],
+        "Documents": [os.path.join(base, "OneDrive", "Documents"), os.path.join(base, "Documents")],
+        "Downloads": [os.path.join(base, "Downloads")],
+    }
+    dirs = []
+    for candidates in groups.values():
+        for p in candidates:
+            if os.path.isdir(p):
+                dirs.append(p)
+                break
+    # Dedupe while preserving order (in case a path appears in two groups).
+    return list(dict.fromkeys(dirs))
+
+
 def get_removable_drive_paths():
     """Return root paths of currently-connected removable drives (USB sticks).
 
@@ -26,14 +51,18 @@ def get_removable_drive_paths():
 class ThreatFileHandler(FileSystemEventHandler):
     def __init__(self, callback, monitored_paths=None):
         self.callback = callback
-        self.monitored_paths = monitored_paths or [os.path.expanduser("~/Desktop"), os.path.expanduser("~/Documents"), os.path.expanduser("~/Downloads")]
+        self.monitored_paths = monitored_paths or get_user_dirs()
 
     def on_created(self, event):
-        if not event.is_directory:
+        if event.is_directory:
+            self._emit("folder_create", event.src_path, event)
+        else:
             self._emit("file_create", event.src_path, event)
 
     def on_deleted(self, event):
-        if not event.is_directory:
+        if event.is_directory:
+            self._emit("folder_delete", event.src_path, event)
+        else:
             self._emit("file_delete", event.src_path, event)
 
     def on_modified(self, event):
@@ -41,7 +70,9 @@ class ThreatFileHandler(FileSystemEventHandler):
             self._emit("file_modify", event.src_path, event)
 
     def on_moved(self, event):
-        if not event.is_directory:
+        if event.is_directory:
+            self._emit("folder_move", event.dest_path, event)
+        else:
             self._emit("file_move", event.dest_path, event)
 
     def _emit(self, event_type, path, event):

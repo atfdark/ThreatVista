@@ -38,7 +38,7 @@ function buildLiveSeries(events, now = Date.now()) {
     const bucket = buckets[LIVE_WINDOW_MINUTES - 1 - minutesAgo];
     bucket.total += 1;
     if (evt.event_type === 'usb_insert') bucket.usb += 1;
-    else if (evt.event_type === 'file_copy') bucket.files += 1;
+    else if (evt.event_type.startsWith('file_') || evt.event_type.startsWith('folder_')) bucket.files += 1;
     else if (evt.event_type === 'network_upload') bucket.network += 1;
   }
   return buckets;
@@ -96,7 +96,10 @@ export default function Dashboard() {
         setIncidents(prev => [d, ...prev].slice(0, 20));
       }
       // Keep the chart + raw metadata stream live with the batch's raw events.
-      const evs = d.events || [];
+      // The batch arrives in collection order (oldest first), so sort it
+      // newest-first before prepending — otherwise the newest event ends up at
+      // the bottom of the stream and the slice keeps the wrong rows.
+      const evs = (d.events || []).slice().sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
       if (evs.length) {
         setLiveEvents(prev => [...evs, ...prev].slice(0, 200));
         setRecentEvents(prev => [...evs, ...prev].slice(0, 10));
@@ -272,7 +275,7 @@ export default function Dashboard() {
                 />
                 <Bar dataKey="usb" fill="#06b6d4" name="USB Inserts" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="network" fill="#3b82f6" name="Network Uploads" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="files" fill="#a855f7" name="Files Copied" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="files" fill="#a855f7" name="File Activity" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -447,7 +450,7 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-cyber-border/40 font-mono">
-              {recentEvents.slice(0, 10).map((evt) => (
+              {[...recentEvents].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 10).map((evt) => (
                 <tr key={evt.id} className="hover:bg-cyber-border/10">
                   <td className="py-2.5 pl-3">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${

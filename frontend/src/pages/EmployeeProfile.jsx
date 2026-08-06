@@ -324,7 +324,7 @@ export default function EmployeeProfile() {
               <Activity className="h-4.5 w-4.5 text-cyber-primary" /> Behavior Timeline
             </h4>
             <div className="space-y-0">
-              {employee.events.slice(0, 12).map((evt, i) => {
+              {[...employee.events].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 12).map((evt, i) => {
                 const dotColor =
                   evt.event_type === 'usb_insert' || evt.event_type === 'usb_remove' ? 'bg-cyber-primary' :
                   evt.event_type === 'file_copy' || evt.event_type === 'file_create' ? 'bg-cyber-accent' :
@@ -389,6 +389,7 @@ export default function EmployeeProfile() {
                     if (activityTab === 'files') return evt.event_type.includes('file');
                     return true;
                   })
+                  .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
                   .slice(0, 20)
                   .map(evt => (
                     <div key={evt.id} className="flex justify-between items-start gap-2 p-2 bg-cyber-bg/50 border border-cyber-border rounded">
