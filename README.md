@@ -135,9 +135,28 @@ Dashboard runs at `http://localhost:5173` (also on the LAN at
 default in `vite.config.js`).
 
 ### 6. (Optional) Run the endpoint agent on a Windows machine
-```bash
-python endpoint_agent/agent.py
+
+**One-click launcher (recommended):** copy the project to the employee laptop,
+open a terminal in the project root, then:
+
+```bat
+start_agent.bat rahul.sharma@threatvista.com
 ```
+
+It installs the agent's dependencies, points the agent at the SOC server
+(edit `BACKEND_URL` at the top of the file), registers this laptop as the
+employee's device, and streams USB / file / process / **network** activity to
+the dashboard. Each monitored machine must use a **different**
+`AGENT_EMPLOYEE_EMAIL` (an employee that exists in the SOC).
+
+Manual alternative (run from the project root):
+```bash
+set BACKEND_URL=http://127.0.0.1:8000
+set AGENT_EMPLOYEE_EMAIL=rahul.sharma@threatvista.com
+python -m endpoint_agent.agent
+```
+`python endpoint_agent/agent.py` also works (a bootstrap adds the project root
+to `sys.path`), but the module form is the safest.
 
 ### 7. LAN demo — one SOC server, many endpoints (hackathon)
 Turn your laptop into the Security Operations Center and teammates' laptops
@@ -149,12 +168,13 @@ into monitored endpoints, all on the same Wi-Fi:
    netsh advfirewall firewall add rule name="ThreatVista API" dir=in action=allow protocol=TCP localport=8000
    netsh advfirewall firewall add rule name="ThreatVista Dashboard" dir=in action=allow protocol=TCP localport=5173
    ```
-3. **On every endpoint machine**, point the agent at the server before starting it:
-   ```bash
-   set BACKEND_URL=http://192.168.1.100:8000
-   python endpoint_agent/agent.py
+3. **On every endpoint machine**, run the agent pointed at the server. Easiest
+   is the one-click launcher (edit `BACKEND_URL` in `start_agent.bat` first):
+   ```bat
+   start_agent.bat rahul.sharma@threatvista.com
    ```
-   Each machine must use a different `AGENT_EMPLOYEE_EMAIL` (a seeded employee).
+   Each machine must use a different `AGENT_EMPLOYEE_EMAIL` (an employee who
+   has registered / exists in the SOC).
 4. **On the server**, point the frontend at the backend:
    ```bash
    cd frontend

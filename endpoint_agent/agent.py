@@ -1,12 +1,21 @@
 import os
+import sys
+
+# When launched directly as a script (`python endpoint_agent/agent.py`), Python
+# only puts the endpoint_agent/ folder on sys.path, not the project root that
+# the `endpoint_agent.*` package imports need. Put the root back so direct
+# launches work the same as `python -m endpoint_agent.agent`.
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 import threading
-import sys
 from datetime import datetime
 
 from endpoint_agent.monitors.file_monitor import start_file_monitoring
 from endpoint_agent.monitors.usb_monitor import USBMonitor
 from endpoint_agent.monitors.process_monitor import ProcessMonitor
+from endpoint_agent.monitors.network_monitor import NetworkMonitor
 from endpoint_agent.monitors.system_monitor import (
     get_device_info,
     get_system_metrics,
@@ -137,6 +146,19 @@ class EndpointAgent:
                 time.sleep(10)
 
         threading.Thread(target=process_loop, daemon=True).start()
+
+        # Network upload monitoring (machine-wide outbound traffic).
+        self._net_monitor = NetworkMonitor(self._event_callback)
+
+        def network_loop():
+            while self.running:
+                try:
+                    self._net_monitor.check_once()
+                except Exception as e:
+                    print(f"Network monitor error: {e}")
+                time.sleep(NetworkMonitor.POLL_SECONDS)
+
+        threading.Thread(target=network_loop, daemon=True).start()
 
         # Main loop
         try:

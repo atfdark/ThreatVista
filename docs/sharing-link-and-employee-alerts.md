@@ -122,68 +122,24 @@ python endpoint_agent/agent.py
 
 These events flow: **agent → `POST /api/events` → saved → risk scored → alert engine → WebSocket → dashboard (Active Sessions feed + Alerts page).**
 
-### ⚠️ A real bug: the USB monitor never actually fires today
+### ✅ USB monitor — now event-driven (fixed)
 
-In `endpoint_agent/agent.py` the USB monitor is started but:
+The old monitor had two fatal flaws: it was **never actually triggered** (the WMI watcher was stored but never iterated, and `check_once()` was never scheduled), and a naive `check_once()` polling loop would re-report every already‑connected drive on every tick — spamming `usb_insert`.
 
-- the WMI watcher is stored but **never iterated** (so no device‑change events are received), and
-- `usb_monitor.check_once()` is **never called** in any loop.
+[`endpoint_agent/monitors/usb_monitor.py`](../endpoint_agent/monitors/usb_monitor.py) now spins up **two background daemon threads** from `start()`:
 
-Result: **plugging in or removing a pen drive sends NO event to the backend today.** (Only *copying files* onto a USB stick gets caught, by the file monitor.)
+| Thread | WMI event | Fires when |
+|--------|-----------|------------|
+| `usb-insert-watcher` | `Win32_LogicalDisk` **creation** | a USB drive is plugged in and Windows mounts it |
+| `usb-remove-watcher` | `Win32_LogicalDisk` **deletion** | a USB drive is ejected / pulled out |
 
-Fix — replace the USB monitor with a simple polling loop that diffs the connected drives and emits insert/remove:
-
-```python
-# endpoint_agent/monitors/usb_monitor.py — new, diff-based version
-import psutil
-from datetime import datetime
-
-class USBMonitor:
-    def __init__(self, callback):
-        self.callback = callback
-        self._known = set()
-
-    def get_removable_drives(self):
-        drives = {}
-        try:
-            for part in psutil.disk_partitions():
-                if "removable" in (part.opts or "").split(",") or "cdrom" in (part.opts or "").split(","):
-                    drives[part.device] = part
-        except Exception:
-            pass
-        return drives
-
-    def check_once(self):
-        current = self.get_removable_drives()
-        new = set(current) - self._known
-        gone = self._known - set(current)
-        for dev in new:
-            self.callback({
-                "event_type": "usb_insert",
-                "usb_status": f"{dev} connected",
-                "details": f"USB drive {dev} inserted"
-            })
-        for dev in gone:
-            self.callback({
-                "event_type": "usb_remove",
-                "usb_status": f"{dev} removed",
-                "details": f"USB drive {dev} removed"
-            })
-        self._known = set(current)
-```
-
-```python
-# endpoint_agent/agent.py — start the poll loop (add next to the other loops)
-def usb_loop():
-    while self.running:
-        try:
-            self._usb_monitor.check_once()
-        except Exception as e:
-            print(f"USB check error: {e}")
-        time.sleep(3)
-
-threading.Thread(target=usb_loop, daemon=True).start()
-```
+- **Event-driven, not polling** — WMI blocks until the OS fires the event; zero CPU waste while idle.
+- **1-second timeout loop** — `stop()` exits cleanly within ~1 second.
+- **`CoInitialize`/`CoUninitialize` per thread** — correct COM threading model on Windows.
+- **Graceful fallback** — if pywin32/WMI isn't installed it prints a warning and returns `False`, so the agent keeps running without USB monitoring.
+- Emits `usb_insert` **and `usb_remove`** — the correlation engine already supports `usb_remove` in its evidence‑destruction rule ([ai/correlation.py](../ai/correlation.py)), the USB report includes it, and demo scenarios replay it.
+- Filters to `DriveType == 2` (removable media) so CD/network/local‑disk activity doesn't spam the feed.
+- **No `agent.py` changes needed** — the `start()` / `stop()` interface is identical.
 
 ### "Download something"
 
