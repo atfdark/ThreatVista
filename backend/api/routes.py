@@ -1,13 +1,13 @@
 import csv
 import io
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta
 from backend.config import AGENT_API_KEY
-from backend.database.connection import get_db
+from backend.database.connection import get_db, SessionLocal
 from backend.models import database as models
 from backend.models.database import AuditLog, Session as SessionModel
 from backend.services.event_service import EventService
@@ -81,6 +81,37 @@ def _run_ai(db: Session, employee_id: int):
             "details": e.details} for e in events]
     thresholds = get_thresholds(db)
     return ai_pipeline.run(raw, employee_id, thresholds)
+
+
+# --- Live risk persistence ---------------------------------------------------
+# Recompute + store an employee's risk score whenever new telemetry arrives, so
+# the Dashboard / Active Sessions risk reflects live activity instead of only
+# what the Employee Profile page computes on demand. Throttled per employee to
+# avoid running the ML pipeline on every single event.
+RISK_RECOMPUTE_SECONDS = 30
+_last_risk_recompute = {}  # employee_id -> datetime
+
+
+def _persist_employee_risk(employee_id: int):
+    """Background task: recompute and persist an employee's live risk score."""
+    db = SessionLocal()
+    try:
+        last = _last_risk_recompute.get(employee_id)
+        if last and (datetime.utcnow() - last).total_seconds() < RISK_RECOMPUTE_SECONDS:
+            return
+        _last_risk_recompute[employee_id] = datetime.utcnow()
+
+        result = _run_ai(db, employee_id)
+        explanation = result["explanation"]
+        emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+        if emp:
+            emp.risk_score = explanation["risk_score"]
+            emp.status = explanation["status"]
+            db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
 
 # Pydantic Schemas
 class LoginRequest(BaseModel):
@@ -393,6 +424,18 @@ def logout(
         db, current_user, "logout", "auth",
         resource_id=str(current_user.id), details="User logout", ip=client_ip(request),
     )
+
+    # When the logged-out user is an employee with a registered endpoint, mark
+    # their device offline in the UI. (If the agent is still running it will
+    # re-heartbeat and come back online within ~30s.)
+    emp = db.query(models.Employee).filter(models.Employee.email == current_user.username).first()
+    if emp:
+        dev = db.query(models.Device).filter(models.Device.employee_id == emp.id).first()
+        if dev:
+            dev.last_seen_at = None
+            dev.status = "offline"
+            db.commit()
+
     return {"message": f"{current_user.username} logged out successfully"}
 
 
@@ -638,6 +681,7 @@ def get_endpoints(
 async def create_event(
     event: EventCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     # When an agent key is configured, telemetry must authenticate with it.
@@ -675,6 +719,10 @@ async def create_event(
                     "timestamp": alert.timestamp.isoformat()
                 }
             })
+
+    # Refresh the employee's stored risk score in the background so the
+    # Dashboard / Active Sessions reflect live activity.
+    background_tasks.add_task(_persist_employee_risk, created_event.employee_id)
 
     return created_event
 

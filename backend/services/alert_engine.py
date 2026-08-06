@@ -1,7 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy.orm import Session
 from backend.models.database import Event, Alert, Employee
+
+# Same timezone the risk features use (IST by default). Event timestamps are
+# stored in UTC, so the office-hours check must shift them into local time the
+# same way ai/features.py does — otherwise a midday UTC event (e.g. 07:00 UTC
+# = 12:30 IST) is wrongly flagged as "outside office hours".
+from ai.features import TIMEZONE_OFFSET_HOURS
 
 class RuleBasedAlertEngine:
     USB_INSERT_RISK = 25
@@ -26,12 +32,13 @@ class RuleBasedAlertEngine:
 
         if event.event_type in ("login", "process_start"):
             if event.timestamp:
-                hour = event.timestamp.hour
+                local = event.timestamp + timedelta(hours=TIMEZONE_OFFSET_HOURS)
+                hour = local.hour
                 if hour < RuleBasedAlertEngine.OFFICE_HOURS_START or hour >= RuleBasedAlertEngine.OFFICE_HOURS_END:
                     alert = Alert(
                         employee_id=event.employee_id,
                         severity="Medium",
-                        reason=f"Activity detected outside office hours at {event.timestamp.strftime('%H:%M')}",
+                        reason=f"Activity detected outside office hours at {local.strftime('%H:%M')}",
                         status="Active",
                         timestamp=datetime.utcnow()
                     )

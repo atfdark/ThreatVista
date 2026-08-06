@@ -23,6 +23,14 @@ function eventBadge(type) {
   return { label, cls: 'text-cyber-muted border-cyber-border bg-cyber-bg/50' };
 }
 
+function riskBadge(score) {
+  if (typeof score !== 'number') return { label: 'N/A', cls: 'text-cyber-muted border-cyber-border/60 bg-cyber-bg/40' };
+  if (score >= 81) return { label: 'CRITICAL', cls: 'text-cyber-danger border-cyber-danger/30 bg-cyber-danger/10' };
+  if (score >= 61) return { label: 'HIGH', cls: 'text-cyber-warning border-cyber-warning/30 bg-cyber-warning/10' };
+  if (score >= 31) return { label: 'MEDIUM', cls: 'text-cyber-secondary border-cyber-secondary/30 bg-cyber-secondary/10' };
+  return { label: 'SAFE', cls: 'text-cyber-success border-cyber-success/30 bg-cyber-success/10' };
+}
+
 const WATCHED = ['DESKTOP', 'DOCUMENTS', 'DOWNLOADS', 'USB', 'PROCESSES'];
 
 export default function ActiveSessions() {
@@ -155,6 +163,7 @@ export default function ActiveSessions() {
               const initials = (emp.name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
               const onlineNow = !!dev.online;
               const recent = eventsByEmployee[emp.id] || [];
+              const risk = riskBadge(emp.risk_score);
               return (
                 <div key={dev.device_id || emp.id} className={`p-6 glass-panel border ${onlineNow ? 'border-cyber-success/20' : 'border-cyber-danger/20'}`}>
                   {/* Header */}
@@ -171,11 +180,16 @@ export default function ActiveSessions() {
                         <span className="text-[10px] text-cyber-muted font-mono">{emp.department || ''}</span>
                       </div>
                     </div>
-                    <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
-                      onlineNow ? 'text-cyber-success bg-cyber-success/10 border-cyber-success/25' : 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25'
-                    }`}>
-                      {onlineNow ? 'ONLINE' : 'OFFLINE'}
-                    </span>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
+                        onlineNow ? 'text-cyber-success bg-cyber-success/10 border-cyber-success/25' : 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25'
+                      }`}>
+                        {onlineNow ? 'ONLINE' : 'OFFLINE'}
+                      </span>
+                      <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${risk.cls}`}>
+                        {risk.label} · {emp.risk_score}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Device details */}
