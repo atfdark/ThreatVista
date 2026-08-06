@@ -93,7 +93,10 @@ _last_risk_recompute = {}  # employee_id -> datetime
 
 
 def _persist_employee_risk(employee_id: int):
-    """Background task: recompute and persist an employee's live risk score."""
+    """Background task: recompute + store an employee's live risk score and turn
+    correlation findings into alert rows — so the Alerts ledger reflects the
+    multi-event patterns (evidence destruction, USB exfiltration, night upload)
+    that the single-event alert rules don't cover."""
     db = SessionLocal()
     try:
         last = _last_risk_recompute.get(employee_id)
@@ -107,7 +110,25 @@ def _persist_employee_risk(employee_id: int):
         if emp:
             emp.risk_score = explanation["risk_score"]
             emp.status = explanation["status"]
-            db.commit()
+
+        # Persist correlation incidents as alerts (dedupe exact active ones so a
+        # persisting pattern doesn't spam the ledger every recompute).
+        for incident in result.get("correlations", []):
+            reason = incident.get("reason") or incident.get("name") or "Correlation"
+            dup = db.query(models.Alert).filter(
+                models.Alert.employee_id == employee_id,
+                models.Alert.status == "Active",
+                models.Alert.reason == reason,
+            ).first()
+            if not dup:
+                db.add(models.Alert(
+                    employee_id=employee_id,
+                    severity=incident.get("severity", "Medium"),
+                    reason=reason,
+                    status="Active",
+                    timestamp=datetime.utcnow(),
+                ))
+        db.commit()
     except Exception:
         pass
     finally:

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -63,33 +63,40 @@ export default function EmployeeProfile() {
   };
 
   // Load appropriate data
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        if (id) {
-          const detail = await api.getEmployeeDetail(parseInt(id));
-          setEmployee(detail);
-          setAiAnalysis(detail.ai_analysis || null);
-          setCommands(detail.commands || []);
-        } else {
-          const list = await api.getEmployees();
-          setEmployees(list);
-          const scores = {};
-          for (const emp of list) {
-            const ai = await api.getAIAnalysis(emp.id);
-            if (ai) scores[emp.id] = ai;
-          }
-          setAiScores(scores);
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      if (id) {
+        const detail = await api.getEmployeeDetail(parseInt(id));
+        setEmployee(detail);
+        setAiAnalysis(detail.ai_analysis || null);
+        setCommands(detail.commands || []);
+      } else {
+        const list = await api.getEmployees();
+        setEmployees(list);
+        const scores = {};
+        for (const emp of list) {
+          const ai = await api.getAIAnalysis(emp.id);
+          if (ai) scores[emp.id] = ai;
         }
-      } catch (err) {
-        console.error("Failed to load employee data", err);
-      } finally {
-        setLoading(false);
+        setAiScores(scores);
       }
+    } catch (err) {
+      console.error("Failed to load employee data", err);
+    } finally {
+      if (!silent) setLoading(false);
     }
-    loadData();
   }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Live: keep the profile / directory fresh without a manual refresh.
+  useEffect(() => {
+    const t = setInterval(() => loadData(true), 15000);
+    return () => clearInterval(t);
+  }, [loadData]);
 
   if (loading) {
     return (

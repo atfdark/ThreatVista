@@ -11,6 +11,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { api } from '../services/mockData';
+import { useWebSocket } from '../services/websocket';
 
 export default function Alerts() {
   const navigate = useNavigate();
@@ -28,20 +29,30 @@ export default function Alerts() {
   })();
   const canAct = role === 'admin' || role === 'analyst';
 
-  const loadAlerts = async () => {
-    setLoading(true);
+  const loadAlerts = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const data = await api.getAlerts();
       setAlerts(data);
     } catch (err) {
       console.error("Failed to load alerts", err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     loadAlerts();
+  }, []);
+
+  // Live: re-fetch the ledger when the backend broadcasts a new alert, and poll
+  // every 10s as a fallback so missed broadcasts / status changes still land.
+  useWebSocket((msg) => {
+    if (msg.type === 'new_alert') loadAlerts(true);
+  });
+  useEffect(() => {
+    const t = setInterval(() => loadAlerts(true), 10000);
+    return () => clearInterval(t);
   }, []);
 
   const handleUpdateStatus = async (alertId, newStatus) => {

@@ -76,6 +76,30 @@ export default function Dashboard() {
     loadData();
   }, []);
 
+  // Live: refresh aggregate stats / employee risk / alerts periodically so the
+  // command overview updates without a manual reload. The WebSocket handles the
+  // instant event & alert feed above; this keeps the stat cards + rankings fresh.
+  useEffect(() => {
+    async function refresh() {
+      try {
+        const [statsData, empsData, alertsData, analyticsData] = await Promise.all([
+          api.getStats(),
+          api.getEmployees(),
+          api.getAlerts(),
+          api.getAnalytics(),
+        ]);
+        setStats(statsData);
+        setEmployees(empsData.sort((a, b) => b.risk_score - a.risk_score));
+        setAlerts(alertsData.slice(0, 3));
+        setAnalytics(analyticsData);
+      } catch (err) {
+        console.error("Failed to refresh dashboard", err);
+      }
+    }
+    const t = setInterval(refresh, 15000);
+    return () => clearInterval(t);
+  }, []);
+
   if (loading) {
     return (
       <div className="flex h-[70vh] items-center justify-center">
