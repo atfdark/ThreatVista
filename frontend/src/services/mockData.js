@@ -1,8 +1,10 @@
 import axios from 'axios';
 
-// Backend API root. Set VITE_API_BASE_URL (e.g. http://192.168.1.100:8000/api)
-// in frontend/.env when the dashboard must talk to a SOC server on the LAN.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+// Backend API root. Default `/api` goes through the Vite dev proxy (same
+// origin), so login works from localhost OR a LAN IP. Override with
+// VITE_API_BASE_URL (e.g. http://192.168.1.100:8000/api) for a direct
+// backend URL when the UI is not served by Vite.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 // Authenticated axios instance: attaches the JWT from localStorage to every
 // request and redirects to /login when the token is rejected by the backend.

@@ -54,7 +54,6 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
-  const [aiScores, setAiScores] = useState({});
   // Forces the live chart's sliding window to advance even during quiet periods.
   const [, setClock] = useState(() => Date.now());
 
@@ -67,7 +66,28 @@ export default function Dashboard() {
     } else if (message.type === 'incident_created') {
       setIncidents(prev => [message.data, ...prev.filter(i => i.id !== message.data.id)].slice(0, 20));
     } else if (message.type === 'incident_updated' || message.type === 'incident_resolved' || message.type === 'incident_archived') {
-      setIncidents(prev => prev.map(i => (i.id === message.data.id ? message.data : i)));
+      setIncidents(prev => {
+        if (message.type === 'incident_resolved' || message.type === 'incident_archived') {
+          return prev.filter(i => i.id !== message.data.id);
+        }
+        return prev.map(i => (i.id === message.data.id ? message.data : i));
+      });
+      Promise.all([api.getStats(), api.getEmployees()])
+        .then(([statsData, empsData]) => {
+          setStats(statsData);
+          setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
+        })
+        .catch((err) => console.error('Failed to refresh dashboard on incident lifecycle', err));
+    } else if (message.type === 'risk_update') {
+      const data = message.data || {};
+      setEmployees((prev) =>
+        prev.map((emp) => {
+          const upd = data[emp.id] ?? data[String(emp.id)];
+          if (!upd) return emp;
+          return { ...emp, risk_score: upd.score, status: upd.status, incident: null };
+        }).sort((a, b) => primaryRisk(b) - primaryRisk(a))
+      );
+      api.getStats().then(setStats).catch(() => {});
     } else if (message.type === 'device_connected') {
       // A new endpoint enrolled — refresh stats / rankings / incidents live so
       // the device shows Online without a manual reload.
@@ -114,19 +134,8 @@ export default function Dashboard() {
     setWsConnected(isConnected);
   }, [isConnected]);
 
-  useEffect(() => {
-    async function loadAI() {
-      if (employees.length) {
-        const scores = {};
-        for (const emp of employees.slice(0, 4)) {
-          const ai = await api.getAIAnalysis(emp.id);
-          if (ai) scores[emp.id] = ai;
-        }
-        setAiScores(scores);
-      }
-    }
-    loadAI();
-  }, [employees]);
+  // Rankings use persisted emp.risk_score / active incident from getEmployees.
+  // Do not mass-call getAIAnalysis — that rewrote Manual Override resets.
 
   const primaryRisk = (emp) => (emp.incident?.risk_score ?? emp.risk_score);
 
@@ -375,11 +384,10 @@ export default function Dashboard() {
             </thead>
             <tbody className="divide-y divide-cyber-border">
               {employees.slice(0, 4).map((emp) => {
-                const ai = aiScores[emp.id];
                 const incident = emp.incident || null;
-                const riskScore = incident ? incident.risk_score : (ai ? ai.risk_score : emp.risk_score);
-                const status = ai ? ai.status : emp.status;
                 const hasIncident = !!incident;
+                const riskScore = hasIncident ? incident.risk_score : emp.risk_score;
+                const status = hasIncident ? incident.severity : emp.status;
                 return (
                   <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
                     <td className="py-3.5 pl-4 flex items-center gap-3">

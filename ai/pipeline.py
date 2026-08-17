@@ -8,6 +8,24 @@ from ai.correlation import CorrelationEngine
 from ai.risk import RiskEngine
 from ai.xai import ExplainableAI
 
+
+def _correlation_event_window(cleaned: List[dict], recent_count: int = 20) -> List[dict]:
+    """Recent events plus any USB insert/remove rows not in that slice.
+
+    Keeps process/file burst rules focused on the latest activity while ensuring
+    USB events from earlier in the session are still available for rules that
+    scan the event list (e.g. evidence destruction).
+    """
+    recent = cleaned[-recent_count:]
+    seen = {(e.get("timestamp"), e.get("event_type"), e.get("details")) for e in recent}
+    extra = [
+        e for e in cleaned
+        if e.get("event_type") in ("usb_insert", "usb_remove")
+        and (e.get("timestamp"), e.get("event_type"), e.get("details")) not in seen
+    ]
+    return recent + extra
+
+
 class AIPipeline:
     def __init__(self, db_session=None):
         self.db = db_session
@@ -23,7 +41,7 @@ class AIPipeline:
         baseline = self.dna.compute_baseline(employee_id, cleaned)
         deviations = self.dna.deviation_scores(features, baseline)
         anomalies = self.model.predict(features)
-        correlations = self.corr.correlate(cleaned[-20:], features)
+        correlations = self.corr.correlate(_correlation_event_window(cleaned), features)
         risk = self.risk.calculate(features, anomalies, correlations, deviations, thresholds)
         explanation = self.xai.explain(features, baseline, anomalies, risk, correlations)
         return {

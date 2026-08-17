@@ -52,6 +52,8 @@ export default function ActiveSessions() {
       if (evs.length) setEvents(prev => [...evs, ...prev].slice(0, 100));
     } else if (message.type === 'device_connected') {
       api.getEndpoints().then(eps => setEndpoints(eps || [])).catch(() => {});
+    } else if (message.type === 'risk_update' || message.type === 'incident_resolved' || message.type === 'incident_archived') {
+      api.getEndpoints().then(eps => setEndpoints(eps || [])).catch(() => {});
     }
   });
 

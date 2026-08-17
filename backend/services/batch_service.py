@@ -39,6 +39,39 @@ def run_ai_for_employee(db: Session, employee_id: int) -> dict:
     return _ai_pipeline.run(raw, employee_id, thresholds)
 
 
+def build_incident_evidence_and_hint(
+    result: dict,
+    burst_incidents: list = None,
+    batch_alerts: list = None,
+    employee_id: int = None,
+) -> tuple:
+    """Build incident timeline evidence and title hint from AI correlations + batch signals."""
+    evidence = []
+    for inc in burst_incidents or []:
+        evidence.append({
+            "title": f"{inc.get('name', 'Burst activity')} ({inc.get('count', 0)} events)",
+            "detail": inc.get("reason", ""),
+        })
+    for corr in result.get("correlations") or []:
+        evidence.append({"title": corr["name"], "detail": corr.get("reason", "")})
+    for alert in batch_alerts or []:
+        alert_emp_id = getattr(alert, "employee_id", None) or alert.get("employee_id")
+        if employee_id is not None and alert_emp_id != employee_id:
+            continue
+        reason = getattr(alert, "reason", None) or alert.get("reason", "")
+        severity = getattr(alert, "severity", None) or alert.get("severity", "")
+        evidence.append({"title": f"Alert: {reason}", "detail": severity})
+
+    correlations = result.get("correlations") or []
+    if correlations:
+        title_hint = correlations[0]["name"]
+    elif burst_incidents:
+        title_hint = burst_incidents[0]["name"]
+    else:
+        title_hint = None
+    return evidence, title_hint
+
+
 # Throttle risk-history writes so a busy endpoint doesn't flood risk_scores.
 _RISK_HISTORY_MIN_SECONDS = 300
 
@@ -91,16 +124,28 @@ def persist_risk_and_correlations(db: Session, employee_id: int, result: dict) -
     (deduping exact active ones so a persisting pattern doesn't spam the
     ledger). Does NOT commit — the caller commits once after the whole batch
     is processed.
+
+    After a Manual Override / resolution with no new security evidence, the
+    live employee score is left alone so Reset Risk stays at 0 / Safe.
     """
     explanation = result.get("explanation", {})
     score = int(explanation.get("risk_score", 0))
+    active = incident_service.get_active_incident(db, employee_id)
+    stale = incident_service._stale_history_only(db, employee_id)
     emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
-    if emp:
-        emp.risk_score = score
-        emp.status = explanation.get("status", "Safe")
+    allow_score_write = active is not None or not stale
+    if emp and allow_score_write:
+        if active is not None:
+            # Keep the employee row aligned with the monotonic incident score.
+            emp.risk_score = active.risk_score
+            emp.status = active.severity
+        else:
+            emp.risk_score = score
+            emp.status = explanation.get("status", "Safe")
 
     persist_behavior_profile(db, employee_id, result.get("baseline") or {})
-    persist_risk_history(db, employee_id, score)
+    if allow_score_write:
+        persist_risk_history(db, employee_id, active.risk_score if active is not None else score)
 
     for incident in result.get("correlations", []):
         reason = incident.get("reason") or incident.get("name") or "Correlation"
@@ -240,24 +285,17 @@ def run_ai_background(emp_ids: set, serialized_events: list, batch_alerts_data: 
                     result = run_ai_for_employee(db, employee_id)
                     persist_risk_and_correlations(db, employee_id, result)
                     explanation = result.get("explanation", {})
-                    risk_by_employee[employee_id] = {
-                        "score": int(explanation.get("risk_score", 0)),
-                        "status": explanation.get("status", "Safe"),
-                        "confidence": explanation.get("confidence", 0),
-                    }
 
                     # Build evidence from this batch's events for this employee.
                     emp_events = [ev for ev in serialized_events if ev.get("employee_id") == employee_id]
                     emp_incidents = _ai_pipeline.corr.analyze_batch(emp_events)
-                    evidence = [
-                        {"title": f"{inc.get('name', 'Burst activity')} ({inc.get('count', 0)} events)",
-                         "detail": inc.get("reason", "")}
-                        for inc in emp_incidents
+                    emp_alerts = [
+                        a for a in batch_alerts_data
+                        if a.get("employee_id") == employee_id
                     ]
-                    for alert_data in batch_alerts_data:
-                        if alert_data.get("employee_id") == employee_id:
-                            evidence.append({"title": f"Alert: {alert_data.get('reason', '')}", "detail": alert_data.get("severity", "")})
-                    title_hint = emp_incidents[0]["name"] if emp_incidents else None
+                    evidence, title_hint = build_incident_evidence_and_hint(
+                        result, burst_incidents=emp_incidents, batch_alerts=emp_alerts,
+                    )
 
                     change = incident_service.apply_risk(db, employee_id, result,
                                                          title_hint=title_hint, evidence=evidence)
@@ -266,6 +304,23 @@ def run_ai_background(emp_ids: set, serialized_events: list, batch_alerts_data: 
                             "event_type": change[0],
                             "incident": incident_service.serialize(db, change[1]),
                         })
+
+                    # Primary displayed score: incident when open, else persisted row
+                    # (respects manual reset / stale-history guard).
+                    active = incident_service.get_active_incident(db, employee_id)
+                    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+                    if active:
+                        risk_by_employee[employee_id] = {
+                            "score": active.risk_score,
+                            "status": active.severity,
+                            "confidence": active.confidence,
+                        }
+                    elif emp:
+                        risk_by_employee[employee_id] = {
+                            "score": emp.risk_score,
+                            "status": emp.status,
+                            "confidence": int(explanation.get("confidence", 0)),
+                        }
                 except Exception as exc:
                     print(f"[batch-bg] AI failed for employee {employee_id}: {exc}")
 
@@ -334,24 +389,14 @@ def process_batch(db: Session, events_data: list[dict]) -> dict:
         result = run_ai_for_employee(db, employee_id)
         persist_risk_and_correlations(db, employee_id, result)
         explanation = result.get("explanation", {})
-        risk_by_employee[employee_id] = {
-            "score": int(explanation.get("risk_score", 0)),
-            "status": explanation.get("status", "Safe"),
-            "confidence": explanation.get("confidence", 0),
-        }
 
         # New-evidence feed for this employee: their burst incidents + batch alerts.
         emp_events = [ev for ev in serialized if ev.get("employee_id") == employee_id]
         emp_incidents = _ai_pipeline.corr.analyze_batch(emp_events)
-        evidence = [
-            {"title": f"{inc.get('name', 'Burst activity')} ({inc.get('count', 0)} events)",
-             "detail": inc.get("reason", "")}
-            for inc in emp_incidents
-        ]
-        for alert in batch_alerts:
-            if alert.employee_id == employee_id:
-                evidence.append({"title": f"Alert: {alert.reason}", "detail": alert.severity})
-        title_hint = emp_incidents[0]["name"] if emp_incidents else None
+        emp_alerts = [a for a in batch_alerts if a.employee_id == employee_id]
+        evidence, title_hint = build_incident_evidence_and_hint(
+            result, burst_incidents=emp_incidents, batch_alerts=emp_alerts,
+        )
 
         change = incident_service.apply_risk(db, employee_id, result,
                                              title_hint=title_hint, evidence=evidence)
@@ -360,6 +405,21 @@ def process_batch(db: Session, events_data: list[dict]) -> dict:
                 "event_type": change[0],
                 "incident": incident_service.serialize(db, change[1]),
             })
+
+        active = incident_service.get_active_incident(db, employee_id)
+        emp_row = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+        if active:
+            risk_by_employee[employee_id] = {
+                "score": active.risk_score,
+                "status": active.severity,
+                "confidence": active.confidence,
+            }
+        elif emp_row:
+            risk_by_employee[employee_id] = {
+                "score": emp_row.risk_score,
+                "status": emp_row.status,
+                "confidence": int(explanation.get("confidence", 0)),
+            }
 
     # 5. One commit for everything.
     db.commit()

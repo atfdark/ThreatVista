@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 
-// Live feed URL, derived from the same backend base as the API client so it
-// follows VITE_API_BASE_URL (LAN demo) without a second setting.
-const _apiBase = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api').replace(/\/api$/, '');
-const WS_URL = _apiBase.replace(/^http/, 'ws') + '/ws';
+// Live feed URL. Prefer VITE_API_BASE_URL when set; otherwise use the current
+// page host so Vite's /ws proxy works on localhost and LAN IPs alike.
+function resolveWsUrl() {
+  const envBase = import.meta.env.VITE_API_BASE_URL;
+  if (envBase) {
+    // Relative API bases (the normal Vite `/api` proxy) need the current
+    // page origin; absolute bases are converted directly to ws/wss.
+    if (envBase.startsWith('/')) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${window.location.host}${envBase.replace(/\/api$/, '')}/ws`;
+    }
+    return envBase.replace(/\/api$/, '').replace(/^http/, 'ws') + '/ws';
+  }
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws`;
+}
+
+const WS_URL = resolveWsUrl();
 
 /**
  * Connects to the ThreatVista WebSocket once and stays connected for the

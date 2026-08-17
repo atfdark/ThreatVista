@@ -96,7 +96,7 @@ export default function Incidents() {
 
   // Live: refetch on any incident lifecycle broadcast + 10s polling fallback.
   useWebSocket((msg) => {
-    if (['incident_created', 'incident_updated', 'incident_resolved', 'incident_archived', 'device_connected'].includes(msg.type)) {
+    if (['incident_created', 'incident_updated', 'incident_resolved', 'incident_archived', 'device_connected', 'risk_update'].includes(msg.type)) {
       loadIncidents(true);
     }
   });

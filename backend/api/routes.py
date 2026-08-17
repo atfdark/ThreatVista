@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta
-from backend.config import AGENT_API_KEY
+from backend.config import AGENT_API_KEY, PUBLIC_URL
 from backend.database.connection import get_db
 from backend.models import database as models
 from backend.models.database import AuditLog, Session as SessionModel
@@ -106,6 +106,11 @@ def _recompute_risk_and_incidents(db: Session, employee_id: int, evidence: list 
 
     result = _run_ai(db, employee_id)
     batch_service.persist_risk_and_correlations(db, employee_id, result)
+    evidence = list(evidence or [])
+    for corr in result.get("correlations") or []:
+        evidence.append({"title": corr["name"], "detail": corr.get("reason", "")})
+    if not title_hint and result.get("correlations"):
+        title_hint = result["correlations"][0]["name"]
     change = incident_service.apply_risk(db, employee_id, result,
                                          title_hint=title_hint, evidence=evidence)
     db.commit()
@@ -115,14 +120,19 @@ def _recompute_risk_and_incidents(db: Session, employee_id: int, evidence: list 
 
 
 def _build_analysis_response(db: Session, employee_id: int, result: dict) -> "AIAnalysisResponse":
-    """AI response using the PRIMARY displayed score: the active incident's
-    monotonic risk when one exists, otherwise the live explanation values."""
+    """AI response using the PRIMARY displayed score: active incident when open,
+    otherwise the persisted employee row (respects manual reset to 0/Safe)."""
     explanation = result["explanation"]
     active_inc = incident_service.get_active_incident(db, employee_id)
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if active_inc:
         risk_score = active_inc.risk_score
         status = active_inc.severity
         confidence = active_inc.confidence
+    elif emp is not None:
+        risk_score = emp.risk_score
+        status = emp.status
+        confidence = explanation.get("confidence", 0)
     else:
         risk_score = explanation["risk_score"]
         status = explanation["status"]
@@ -579,19 +589,13 @@ def get_dashboard(
     employees = db.query(models.Employee).all()
     alerts = db.query(models.Alert).all()
 
+    # Use persisted employee / active-incident scores. Do NOT re-run AI here —
+    # that was overwriting Manual Override resets on every dashboard refresh.
     risk_scores = []
     for emp in employees:
-        result = _run_ai(db, emp.id)
-        explanation = result["explanation"]
-        emp.risk_score = int(explanation["risk_score"])
-        emp.status = explanation["status"]
-        # Keep incident state consistent with the fresh assessment (never lowers).
-        incident_service.apply_risk(db, emp.id, result)
         active_inc = incident_service.get_active_incident(db, emp.id)
-        # Primary displayed score: the incident's monotonic risk when one is active.
-        primary = active_inc.risk_score if active_inc else int(explanation["risk_score"])
+        primary = active_inc.risk_score if active_inc else (emp.risk_score or 0)
         risk_scores.append(primary)
-    db.commit()
 
     risk_dist = {"Low (0-30)": 0, "Medium (31-60)": 0, "High (61-80)": 0, "Critical (81-100)": 0}
     for score in risk_scores:
@@ -651,18 +655,16 @@ def get_employee_detail(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     result = _run_ai(db, employee_id)
-    explanation = result["explanation"]
     # Persist live DNA + risk history + correlation alerts so Behavior DNA and
     # Historical Risk Progression stay current for self-registered employees
     # who never got a seeded profile.
     batch_service.persist_risk_and_correlations(db, employee_id, result)
-    employee.risk_score = int(explanation["risk_score"])
-    employee.status = explanation["status"]
     incident_service.apply_risk(db, employee_id, result)
     db.commit()
 
     # Reload relationships after persistence so the response reflects the
-    # freshly written Behavior DNA and risk history.
+    # freshly written Behavior DNA and risk history (risk/status may stay at
+    # manual 0/Safe when stale-history guard skipped overwrite).
     db.refresh(employee)
     employee.behavior_profile = (
         db.query(models.BehaviorProfile)
@@ -1007,12 +1009,10 @@ async def analyze_employee(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     result = _run_ai(db, employee_id)
-    explanation = result["explanation"]
-
-    employee.risk_score = int(explanation["risk_score"])
-    employee.status = explanation["status"]
+    batch_service.persist_risk_and_correlations(db, employee_id, result)
     change = incident_service.apply_risk(db, employee_id, result)
     db.commit()
+    db.refresh(employee)
 
     log_action(
         db, current_user, "ai.analyze", "employee",
@@ -1037,10 +1037,7 @@ async def get_ai_analysis(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     result = _run_ai(db, employee_id)
-    explanation = result["explanation"]
-
-    employee.risk_score = int(explanation["risk_score"])
-    employee.status = explanation["status"]
+    batch_service.persist_risk_and_correlations(db, employee_id, result)
     incident_service.apply_risk(db, employee_id, result)
     db.commit()
 
@@ -1178,18 +1175,15 @@ async def reset_employee_risk(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles("admin")),
 ):
-    """Admin-only manual override: force an employee back to 0 / Safe. If an
-    ACTIVE incident exists it is resolved as a 'Manual Override' so the primary
-    displayed score follows the override. Audited via incident.reset_risk."""
+    """Admin-only manual override: force an employee back to 0 / Safe. Resolves
+    every open incident as Manual Override and writes a fresh resolved anchor so
+    AI recomputes cannot snap the score back until new security evidence arrives."""
     employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    employee.risk_score = 0
-    employee.status = "Safe"
-    active = incident_service.get_active_incident(db, employee_id)
-    if active:
-        incident_service.resolve_incident(db, active, current_user.username, "Manual Override")
+    resolved = incident_service.force_manual_override(db, employee_id, current_user.username)
+    batch_service.persist_risk_history(db, employee_id, 0)
 
     log_action(
         db, current_user, "incident.reset_risk", "employee",
@@ -1198,16 +1192,21 @@ async def reset_employee_risk(
         ip=client_ip(request),
     )
     db.commit()
+    db.refresh(employee)
 
-    if active:
+    for inc in resolved:
         await manager.broadcast({
             "type": "incident_resolved",
-            "data": incident_service.serialize(db, active),
+            "data": incident_service.serialize(db, inc),
         })
+    await manager.broadcast({
+        "type": "risk_update",
+        "data": {str(employee_id): {"score": 0, "status": "Safe", "confidence": 0}},
+    })
     return {
         "message": "Employee risk reset",
-        "employee": {"id": employee.id, "risk_score": 0, "status": "Safe"},
-        "incident": incident_service.serialize(db, active) if active else None,
+        "employee": {"id": employee.id, "risk_score": employee.risk_score, "status": employee.status},
+        "incident": incident_service.serialize(db, resolved[0]) if resolved else None,
     }
 
 
@@ -1394,7 +1393,9 @@ def agent_enroll(
     # The browser reached us at request.base_url (scheme + host + port). That is
     # exactly the address the endpoint agent on the same LAN must use, so the
     # employee never has to type a backend IP.
-    backend_url = str(request.base_url).rstrip("/")
+    # Prefer an explicitly configured address for LAN deployments. Without it,
+    # use the request URL (which is convenient for a single local machine).
+    backend_url = PUBLIC_URL or str(request.base_url).rstrip("/")
     data = create_enrollment_token(db, employee, backend_url)
     log_action(
         db, current_user, "agent.enroll", "employee",

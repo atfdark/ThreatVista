@@ -105,9 +105,9 @@ class CorrelationEngine:
         return "Medium", 15
 
     def _rule_usb_mass_copy(self, events, features):
-        usb = [e for e in events if e.get("event_type") == "usb_insert"]
+        # Use 24h features so USB inserts outside the recent-event slice still count.
         copies = features.get("files_copied_24h", 0)
-        if usb and copies > 50:
+        if features.get("usb_inserts_24h", 0) > 0 and copies > 50:
             return {
                 "name": "USB Mass Exfiltration",
                 "severity": "High",
@@ -117,9 +117,8 @@ class CorrelationEngine:
         return None
 
     def _rule_usb_data_staging(self, events, features):
-        usb = [e for e in events if e.get("event_type") == "usb_insert"]
         copies = features.get("files_copied_24h", 0)
-        if usb and copies >= 5:
+        if features.get("usb_inserts_24h", 0) > 0 and copies >= 5:
             return {
                 "name": "USB Data Staging",
                 "severity": "Medium",

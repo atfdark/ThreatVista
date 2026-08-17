@@ -49,6 +49,12 @@ CORS_ORIGINS = (
 HOST = os.environ.get("THREATVISTA_HOST", "0.0.0.0")
 PORT = int(os.environ.get("THREATVISTA_PORT", "8000"))
 
+# Address embedded in endpoint enrollment files. When the dashboard is served
+# through Vite's local proxy, ``request.base_url`` is localhost from the API's
+# perspective; a LAN demo needs the SOC machine's reachable address instead.
+# Leave empty to preserve the request-derived URL for single-machine use.
+PUBLIC_URL = os.environ.get("THREATVISTA_PUBLIC_URL", "").strip().rstrip("/")
+
 # Optional shared key for endpoint agents posting telemetry. When empty, the
 # /api/events endpoint stays open (hackathon default).
 AGENT_API_KEY = os.environ.get("THREATVISTA_AGENT_KEY", "")

@@ -114,6 +114,26 @@ def _title_from_explanation(explanation: dict) -> str:
     return "Suspicious Activity Detected"
 
 
+def _usb_file_staging_pattern(result: dict) -> bool:
+    """True when USB was used with meaningful file activity in the last 24h."""
+    features = result.get("features") or {}
+    return (
+        features.get("usb_inserts_24h", 0) > 0
+        and features.get("files_copied_24h", 0) >= 5
+    )
+
+
+def _usb_staging_title(result: dict, title_hint: str = None) -> str:
+    """Prefer correlation name, then hint, then a default staging label."""
+    if title_hint:
+        return title_hint
+    for corr in result.get("correlations") or []:
+        name = corr.get("name")
+        if name in ("USB Data Staging", "USB Mass Exfiltration"):
+            return name
+    return "USB Data Staging"
+
+
 # --- Queries / serialization -------------------------------------------------
 def get_active_incident(db: Session, employee_id: int):
     """The employee's latest ACTIVE/INVESTIGATING incident, if any."""
@@ -164,14 +184,31 @@ def serialize(db: Session, incident, employee_name: str = None) -> dict:
     }
 
 
+# Event types that can re-open risk after a Manual Override / resolution.
+# Heartbeats, system metrics, and process noise alone must not snap risk back.
+_SECURITY_EVENT_TYPES = (
+    "usb_insert",
+    "usb_remove",
+    "file_create",
+    "file_delete",
+    "file_modify",
+    "file_move",
+    "folder_create",
+    "folder_move",
+    "folder_delete",
+    "network_upload",
+)
+
+
 # --- Core decision logic -----------------------------------------------------
 def _stale_history_only(db: Session, employee_id: int) -> bool:
     """True when the employee's only "recent" evidence is pre-resolution history.
 
-    After an analyst closes an incident we must not auto-open a new one just
-    because a recompute of the same old events still looks risky. A fresh
-    incident is only allowed when either enough time has passed OR genuinely new
-    events arrived after the last one was closed.
+    After an analyst closes an incident (especially Manual Override / reset) we
+    must not auto-open a new one or re-raise the live score just because a
+    recompute of the same old events still looks risky. A fresh incident is
+    only allowed when genuinely new *security-relevant* events arrived after
+    the last one was closed.
     """
     latest = get_latest_incident(db, employee_id)
     if latest is None or latest.status not in (STATUS_RESOLVED, STATUS_ARCHIVED):
@@ -179,17 +216,69 @@ def _stale_history_only(db: Session, employee_id: int) -> bool:
     closed_at = latest.resolved_at or latest.updated_at or latest.created_at
     if closed_at is None:
         return True
-    if (datetime.utcnow() - closed_at).total_seconds() < INCIDENT_REOPEN_COOLDOWN_MINUTES * 60:
-        return True
     newer = (
         db.query(models.Event)
         .filter(
             models.Event.employee_id == employee_id,
             models.Event.timestamp > closed_at,
+            models.Event.event_type.in_(_SECURITY_EVENT_TYPES),
         )
         .count()
     )
-    return newer == 0
+    if newer > 0:
+        return False
+    return True
+
+
+def list_active_incidents(db: Session, employee_id: int):
+    """All ACTIVE/INVESTIGATING incidents for an employee (should usually be ≤1)."""
+    return (
+        db.query(models.Incident)
+        .filter(
+            models.Incident.employee_id == employee_id,
+            models.Incident.active == True,
+        )
+        .order_by(models.Incident.created_at.desc(), models.Incident.id.desc())
+        .all()
+    )
+
+
+def force_manual_override(db: Session, employee_id: int, admin_name: str) -> list:
+    """Force employee to 0/Safe, resolve every open incident, and write a fresh
+    RESOLVED Manual Override anchor so stale-history stays locked until new
+    security evidence arrives. Returns the incidents that were resolved."""
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if emp is None:
+        return []
+
+    resolved = []
+    for active in list_active_incidents(db, employee_id):
+        resolve_incident(db, active, admin_name, "Manual Override")
+        resolved.append(active)
+
+    emp.risk_score = 0
+    emp.status = "Safe"
+
+    now = datetime.utcnow()
+    # Fresh anchor so closed_at is "now" even when there was no active incident.
+    marker = models.Incident(
+        employee_id=employee_id,
+        title="Manual Risk Reset",
+        severity="Low",
+        status=STATUS_RESOLVED,
+        risk_score=0,
+        confidence=0,
+        active=False,
+        resolved_at=now,
+        resolved_by=admin_name,
+        resolution_reason="Manual Override",
+        updated_at=now,
+        timeline_json="[]",
+    )
+    db.add(marker)
+    db.flush()
+    append_timeline(marker, "resolved", f"Risk reset by {admin_name}", "Manual Override")
+    return resolved
 
 
 def apply_risk(
@@ -237,12 +326,20 @@ def apply_risk(
             return ("incident_updated", active)
         return None
 
-    if status == "Safe":
+    usb_staging = _usb_file_staging_pattern(result)
+    if status == "Safe" and not usb_staging:
         return None
     if _stale_history_only(db, employee_id):
         return None
 
-    title = title_hint or _title_from_explanation(explanation)
+    if usb_staging and status == "Safe":
+        title = _usb_staging_title(result, title_hint)
+        copies = (result.get("features") or {}).get("files_copied_24h", 0)
+        staging_detail = f"USB activity with {copies} file operations in 24h"
+        if not any(ev.get("title") == title for ev in evidence):
+            evidence = list(evidence) + [{"title": title, "detail": staging_detail}]
+    else:
+        title = title_hint or _title_from_explanation(explanation)
     incident = models.Incident(
         employee_id=employee_id,
         title=title,

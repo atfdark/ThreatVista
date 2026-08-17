@@ -28,7 +28,6 @@ export default function EmployeeProfile() {
   
   // List Mode States
   const [employees, setEmployees] = useState([]);
-  const [aiScores, setAiScores] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
   
@@ -40,6 +39,39 @@ export default function EmployeeProfile() {
   const [commandErr, setCommandErr] = useState('');
   const [activityTab, setActivityTab] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [resetRiskBusy, setResetRiskBusy] = useState(false);
+  const [resetRiskMsg, setResetRiskMsg] = useState('');
+  const [resetRiskErr, setResetRiskErr] = useState('');
+
+  const userRole = (() => {
+    try { return JSON.parse(localStorage.getItem('threatvista_user') || '{}').role || 'admin'; }
+    catch { return 'admin'; }
+  })();
+  const isAdmin = userRole === 'admin';
+
+  const handleResetRisk = async () => {
+    if (!id || !isAdmin) return;
+    setResetRiskBusy(true);
+    setResetRiskMsg('');
+    setResetRiskErr('');
+    try {
+      const res = await api.resetEmployeeRisk(parseInt(id, 10));
+      const score = res?.employee?.risk_score ?? 0;
+      const status = res?.employee?.status ?? 'Safe';
+      setEmployee((prev) => prev ? { ...prev, risk_score: score, status, incident: null } : prev);
+      setAiAnalysis((prev) => prev
+        ? { ...prev, risk_score: score, status }
+        : { risk_score: score, status, reasons: [], recommendations: [] });
+      setResetRiskMsg('✓ Risk reset to 0% / Safe. Active incident resolved (Manual Override).');
+      setTimeout(() => setResetRiskMsg(''), 5000);
+      // Soft refresh DNA/history — score is already forced from the API response.
+      await loadData(true);
+    } catch (err) {
+      setResetRiskErr(err?.response?.data?.detail || 'Failed to reset risk.');
+    } finally {
+      setResetRiskBusy(false);
+    }
+  };
 
   // Simulated remote-command actions from the SOC console
   const handleCommand = async (command, label) => {
@@ -77,12 +109,9 @@ export default function EmployeeProfile() {
       } else {
         const list = await api.getEmployees();
         setEmployees(list);
-        const scores = {};
-        for (const emp of list) {
-          const ai = await api.getAIAnalysis(emp.id);
-          if (ai) scores[emp.id] = ai;
-        }
-        setAiScores(scores);
+        // Use persisted employee/incident scores from the list API.
+        // Do NOT call getAIAnalysis per card — that re-ran AI for everyone and
+        // was snapping Manual Override resets back to Critical.
       }
     } catch (err) {
       console.error("Failed to load employee data", err);
@@ -122,6 +151,23 @@ export default function EmployeeProfile() {
     })();
 
     if (!matchesEmployee) return;
+
+    if (msg.type === 'risk_update' && !id) {
+      const data = msg.data || {};
+      setEmployees((prev) =>
+        prev.map((emp) => {
+          const upd = data[emp.id] ?? data[String(emp.id)];
+          if (!upd) return emp;
+          return { ...emp, risk_score: upd.score, status: upd.status, incident: null };
+        })
+      );
+    } else if (msg.type === 'risk_update' && id && empId) {
+      const upd = data[empId] ?? data[String(empId)];
+      if (upd) {
+        setEmployee((prev) => prev ? { ...prev, risk_score: upd.score, status: upd.status, incident: null } : prev);
+        setAiAnalysis((prev) => prev ? { ...prev, risk_score: upd.score, status: upd.status } : prev);
+      }
+    }
 
     if ([
       'device_connected',
@@ -187,6 +233,11 @@ export default function EmployeeProfile() {
       return true;
     };
 
+    const hasLiveIncident = employee.incident
+      && (employee.incident.status === 'ACTIVE' || employee.incident.status === 'INVESTIGATING');
+    const headerRisk = hasLiveIncident && aiAnalysis ? aiAnalysis.risk_score : employee.risk_score;
+    const headerStatus = hasLiveIncident && aiAnalysis ? aiAnalysis.status : employee.status;
+
     // AI recommendation rules
     const getRecommendations = (score) => {
       if (score > 75) {
@@ -228,28 +279,52 @@ export default function EmployeeProfile() {
             </div>
           </div>
 
-          <div className="flex items-center gap-6 bg-cyber-bg/50 border border-cyber-border px-5 py-3 rounded-lg">
-            <div>
-              <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Risk Assessment</span>
-              <span className="text-3xl font-extrabold text-cyber-text font-mono">
-                {aiAnalysis ? `${aiAnalysis.risk_score}%` : `${employee.risk_score}%`}
-              </span>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center gap-6 bg-cyber-bg/50 border border-cyber-border px-5 py-3 rounded-lg">
+              <div>
+                <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Risk Assessment</span>
+                <span className="text-3xl font-extrabold text-cyber-text font-mono">
+                  {headerRisk}%
+                </span>
+              </div>
+              <div className="h-10 w-px bg-cyber-border"></div>
+              <div>
+                <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Classification</span>
+                <span className={`text-xs font-mono px-2 py-0.5 rounded border inline-block mt-1 font-semibold uppercase ${
+                  headerStatus === 'Critical' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                  headerStatus === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
+                  headerStatus === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                  headerStatus === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
+                  'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
+                }`}>
+                  {headerStatus}
+                </span>
+              </div>
             </div>
-            <div className="h-10 w-px bg-cyber-border"></div>
-            <div>
-              <span className="text-[10px] text-cyber-muted font-mono uppercase tracking-wider block">Classification</span>
-              <span className={`text-xs font-mono px-2 py-0.5 rounded border inline-block mt-1 font-semibold uppercase ${
-                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Critical' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
-                (aiAnalysis ? aiAnalysis.status : employee.status) === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25' :
-                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
-                (aiAnalysis ? aiAnalysis.status : employee.status) === 'Suspicious' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
-                'text-cyber-success bg-cyber-success/10 border-cyber-success/25'
-              }`}>
-                {aiAnalysis ? aiAnalysis.status : employee.status}
-              </span>
-            </div>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleResetRisk}
+                disabled={resetRiskBusy}
+                title="Force risk to 0% / Safe and resolve active incident (Manual Override)"
+                className="px-3 py-2 bg-cyber-danger/10 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg rounded border border-cyber-danger/30 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors disabled:opacity-50"
+              >
+                {resetRiskBusy ? 'RESETTING…' : 'RESET RISK TO 0'}
+              </button>
+            )}
           </div>
         </div>
+
+        {resetRiskMsg && (
+          <div className="p-2.5 bg-cyber-success/10 border border-cyber-success/30 rounded text-[10px] text-cyber-success font-mono">
+            {resetRiskMsg}
+          </div>
+        )}
+        {resetRiskErr && (
+          <div className="p-2.5 bg-cyber-danger/10 border border-cyber-danger/30 rounded text-[10px] text-cyber-danger font-mono">
+            {resetRiskErr}
+          </div>
+        )}
 
         {/* Current Incident (persistent lifecycle, monotonic risk) */}
         {employee.incident && (
@@ -801,9 +876,9 @@ export default function EmployeeProfile() {
       {/* Grid of Employees Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {filteredEmployees.map((emp) => {
-          const ai = aiScores[emp.id];
-          const riskScore = ai ? ai.risk_score : emp.risk_score;
-          const status = ai ? ai.status : emp.status;
+          const incident = emp.incident || null;
+          const riskScore = incident ? incident.risk_score : emp.risk_score;
+          const status = incident ? incident.severity : emp.status;
           return (
             <div key={emp.id} className="p-6 glass-panel border border-cyber-border/80 flex flex-col justify-between h-56">
               <div>

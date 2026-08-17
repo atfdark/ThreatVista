@@ -124,6 +124,12 @@ exposes it on every interface so endpoint agents on other machines can reach
 it. The bind host/port can also be set with `THREATVISTA_HOST` /
 `THREATVISTA_PORT` (see `.env.example`).
 
+For a LAN demo, set `THREATVISTA_PUBLIC_URL` in the project `.env` to the SOC
+laptop's reachable address (for example `http://192.168.1.100:8000`) before
+downloading an endpoint enrollment config. Otherwise a config downloaded while
+using localhost will contain `127.0.0.1`, which points back to the endpoint
+laptop and cannot reach the SOC server.
+
 ### 5. Start the frontend
 ```bash
 cd frontend
