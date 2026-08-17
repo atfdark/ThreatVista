@@ -9,8 +9,20 @@ import { formatIST, toISTDate, IST_TIME_ZONE } from '../utils/time';
 
 /** Build + trigger the browser download of the agent config file. */
 function downloadAgentConfig(data) {
+  let backendUrl = data.backend_url;
+  // If the backend returned localhost/127.0.0.1 (due to Vite proxying locally)
+  // but the browser accessed this page via a LAN IP or hostname, use the current host so the agent can reach the backend.
+  if (
+    (!backendUrl || backendUrl.includes('127.0.0.1') || backendUrl.includes('localhost')) &&
+    window.location.hostname &&
+    window.location.hostname !== 'localhost' &&
+    window.location.hostname !== '127.0.0.1'
+  ) {
+    backendUrl = `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+
   const blob = new Blob(
-    [JSON.stringify({ token: data.token, backend_url: data.backend_url }, null, 2)],
+    [JSON.stringify({ token: data.token, backend_url: backendUrl }, null, 2)],
     { type: 'application/json' }
   );
   const url = URL.createObjectURL(blob);
