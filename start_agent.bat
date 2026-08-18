@@ -3,19 +3,10 @@ REM ============================================================
 REM  ThreatVista Endpoint Agent - one-click launcher
 REM  Run this on an EMPLOYEE laptop (Windows, Python 3.10+ installed).
 REM
-REM  No arguments needed. Before running:
-REM    1. Log in to ThreatVista on this laptop.
-REM    2. Open your profile and click "Connect This Device".
-REM    3. The browser downloads threatvista-agent-config.json.
-REM       Leave it next to this file (or in Downloads).
-REM    4. Double-click this file. Done.
-REM
-REM  What it does:
-REM    1. Installs the agent's Python dependencies (safe to re-run).
-REM    2. Registers this laptop as the employee's device (shows in
-REM       Active Sessions as ONLINE) and consumes the enrollment token.
-REM    3. Streams USB / file / process / network activity to the SOC
-REM       dashboard in real time.
+REM  Usage:
+REM    start_agent.bat                       (uses saved config / interactive prompt if IP changed)
+REM    start_agent.bat 10.157.56.246:8000    (connect to specific IP/port on same Wi-Fi)
+REM    start_agent.bat https://xyz.ngrok-free.app (connect across different internet/tunnel)
 REM ============================================================
 setlocal
 
@@ -36,12 +27,10 @@ if errorlevel 1 (
 echo.
 echo   ========================================
 echo    ThreatVista Endpoint Agent
-echo    Backend  : read from threatvista-agent-config.json
 echo   ========================================
 echo.
 
-echo   [1/2] Installing agent dependencies...
-python -m pip install --quiet --upgrade pip
+echo   [1/2] Checking agent dependencies...
 python -m pip install --quiet requests watchdog psutil pywin32
 if errorlevel 1 (
     echo.
@@ -54,7 +43,7 @@ if errorlevel 1 (
 echo   [2/2] Starting monitoring. Press Ctrl+C to stop.
 echo.
 
-python -m endpoint_agent.agent
+python -m endpoint_agent.agent %*
 
 echo.
 echo   Agent stopped.

@@ -51,14 +51,43 @@ the ThreatVista web portal, then runs the agent — it wires itself up.
 The backend URL and enrollment token come from
 `threatvista-agent-config.json`, not environment variables.
 
-## Running
+## Running & Dynamic IP / Network Changes
 
+The agent supports automatic network reconnection across changing Wi-Fi networks and remote internet connections:
+
+### 1. Default Run (Same Wi-Fi / Local Network)
 ```bash
-# From the project root, with the backend already running AND a config file
-# downloaded from the employee profile page:
-python endpoint_agent/agent.py
-# ...or simply double-click start_agent.bat (installs deps + launches it).
+# Double-click or run from terminal:
+.\start_agent.bat
 ```
+- If the server's IP changed (e.g. from `192.168.0.x` to `10.157.56.x`), the agent will automatically prompt:
+  ```text
+  [!] Could not reach ThreatVista backend at: http://...
+  [?] Enter new Backend IP/URL:
+  ```
+  Type the server's current IP (e.g., `http://10.157.56.246:8000`), and the agent will verify the connection and update `threatvista-agent-device.json` automatically!
+
+### 2. Passing the Backend IP Directly
+```bash
+# Pass the IP as a command-line argument:
+.\start_agent.bat 10.157.56.246:8000
+# Or via Python:
+python -m endpoint_agent.agent --backend-url http://10.157.56.246:8000
+```
+
+### 3. Remote / Different Internet Connections (Across Networks / 4G / WAN)
+If the backend and employee laptop are on **different internet connections** (e.g. employee is remote, or on mobile data), private LAN IPs (`192.168.x.x` / `10.x.x.x`) cannot be reached directly.
+
+1. **On the Backend PC**, start a free tunnel:
+   ```bash
+   ngrok http 8000
+   # Or: cloudflared tunnel --url http://localhost:8000
+   ```
+2. **On the Employee Laptop**, connect using the public tunnel URL:
+   ```bash
+   .\start_agent.bat https://your-tunnel-subdomain.ngrok-free.app
+   ```
+   The agent will stream telemetry securely across the internet to the backend!
 
 ## Monitors
 

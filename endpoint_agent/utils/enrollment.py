@@ -99,3 +99,13 @@ def save_device_identity(identity):
         print(f"[+] Saved device identity to {path}")
     except Exception as exc:
         print(f"[!] Could not save {DEVICE_FILENAME}: {exc}")
+
+
+def update_device_backend_url(new_url: str):
+    """Update backend_url in threatvista-agent-device.json so next runs connect automatically."""
+    identity = load_device_identity()
+    if identity:
+        identity["backend_url"] = (new_url or "").strip().rstrip("/")
+        save_device_identity(identity)
+        return True
+    return False

@@ -8,17 +8,16 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Resolve which backend + identity to use BEFORE importing sender.py, which
-# bakes API_BASE_URL from the BACKEND_URL environment variable at import time.
 from endpoint_agent.utils import enrollment
-
-ENROLLMENT = enrollment.load_enrollment_config()   # freshly downloaded token
-DEVICE_IDENTITY = enrollment.load_device_identity()  # already-registered device
-if ENROLLMENT:
-    os.environ["BACKEND_URL"] = ENROLLMENT["backend_url"]
-elif DEVICE_IDENTITY and DEVICE_IDENTITY.get("backend_url"):
-    os.environ["BACKEND_URL"] = DEVICE_IDENTITY["backend_url"]
-
+from endpoint_agent.utils.sender import (
+    send_event_batch,
+    send_heartbeat,
+    register_device_with_token,
+    check_backend_health,
+    set_backend_url,
+    get_backend_url,
+)
+from endpoint_agent.utils.batcher import EventBatcher
 import time
 import threading
 from datetime import datetime
@@ -32,23 +31,28 @@ from endpoint_agent.monitors.system_monitor import (
     get_system_metrics,
     get_running_processes,
 )
-from endpoint_agent.utils.sender import (
-    send_event_batch,
-    send_heartbeat,
-    register_device_with_token,
-    check_backend_health,
-)
-from endpoint_agent.utils.batcher import EventBatcher
 
 HEARTBEAT_SECONDS = int(os.environ.get("AGENT_HEARTBEAT_SECONDS", "30"))
 
 
 class EndpointAgent:
-    def __init__(self):
+    def __init__(self, backend_url_override: str = None):
         self.running = False
         self.employee_id = None
         self.device_id = None
         self._usb_monitor = None
+        self.enrollment = enrollment.load_enrollment_config()
+        self.device_identity = enrollment.load_device_identity()
+
+        # Prioritize CLI argument > enrollment file > device identity > env var
+        initial_url = (
+            backend_url_override
+            or (self.enrollment.get("backend_url") if self.enrollment else None)
+            or (self.device_identity.get("backend_url") if self.device_identity else None)
+            or os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
+        )
+        set_backend_url(initial_url)
+
         # Collect telemetry for ~1s (or 100 events) and send it as one bulk
         # request instead of one HTTP POST per event.
         self._batcher = EventBatcher(send_event_batch)
@@ -64,27 +68,57 @@ class EndpointAgent:
 
         self._batcher.add(event_data)
 
-    def _register(self):
-        """Resolve this machine's device + employee identity.
+    def _ensure_backend_connected(self) -> bool:
+        """Verify backend connectivity. If unreachable, prompt the user for the new IP/URL."""
+        if check_backend_health():
+            return True
 
-        Preferred path: an enrollment token freshly downloaded from the employee
-        profile page. The backend validates/consumes it and returns the real
-        employee id, which we persist so the next run simply reconnects to the
-        same device (no duplicate registration, no re-enrollment).
-        """
-        if ENROLLMENT:
+        current = get_backend_url()
+        print(f"\n[!] Could not reach ThreatVista backend at: {current}")
+        print("    The server IP may have changed, or you are connected to a different network.")
+        print("    Hints:")
+        print("      * Same Wi-Fi : Enter the server laptop's new IP (e.g. http://10.157.56.246:8000)")
+        print("      * Remote / WAN: Enter your ngrok/tunnel URL (e.g. https://xyz.ngrok-free.app)")
+
+        while True:
+            try:
+                user_input = input("\n[?] Enter new Backend IP/URL (Press Enter to retry current, 'q' to quit): ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return False
+
+            if user_input.lower() in ("q", "quit", "exit"):
+                return False
+
+            if user_input:
+                candidate = user_input
+                if not (candidate.startswith("http://") or candidate.startswith("https://")):
+                    candidate = f"http://{candidate}"
+                print(f"[*] Testing connection to {candidate}...")
+                if check_backend_health(candidate):
+                    set_backend_url(candidate)
+                    enrollment.update_device_backend_url(candidate)
+                    print(f"[+] Successfully connected to {candidate}!")
+                    return True
+                else:
+                    print(f"[-] Still cannot reach {candidate}. Ensure backend is running and reachable.")
+            else:
+                print(f"[*] Retrying connection to {get_backend_url()}...")
+                if check_backend_health():
+                    print("[+] Backend connected.")
+                    return True
+                print("[-] Unreachable.")
+
+    def _register(self):
+        """Resolve this machine's device + employee identity."""
+        if self.enrollment:
             device_info = get_device_info()
-            result, err = register_device_with_token(ENROLLMENT["token"], device_info)
+            result, err = register_device_with_token(self.enrollment["token"], device_info)
             if err:
-                # The token was rejected (expired / already used / unknown).
-                # Drop the stale file so it stops failing, then — if this laptop
-                # was already enrolled — just reconnect instead of asking the
-                # employee to click "Connect This Device" again.
                 print(f"[!] Enrollment token rejected: {err}")
-                enrollment.delete_enrollment_config(ENROLLMENT)
-                if DEVICE_IDENTITY:
-                    self.device_id = DEVICE_IDENTITY["device_id"]
-                    self.employee_id = DEVICE_IDENTITY["employee_id"]
+                enrollment.delete_enrollment_config(self.enrollment)
+                if self.device_identity:
+                    self.device_id = self.device_identity["device_id"]
+                    self.employee_id = self.device_identity["employee_id"]
                     print(f"[+] This laptop is already enrolled — reconnecting to device {self.device_id} "
                           f"(employee #{self.employee_id}).")
                     print("    You do NOT need to click 'Connect This Device' again.")
@@ -99,15 +133,15 @@ class EndpointAgent:
             enrollment.save_device_identity({
                 "device_id": self.device_id,
                 "employee_id": self.employee_id,
-                "backend_url": ENROLLMENT["backend_url"],
+                "backend_url": get_backend_url(),
             })
             # The token is single-use; remove the file so it can never be reused.
-            enrollment.delete_enrollment_config(ENROLLMENT)
+            enrollment.delete_enrollment_config(self.enrollment)
             return True
 
-        if DEVICE_IDENTITY:
-            self.device_id = DEVICE_IDENTITY["device_id"]
-            self.employee_id = DEVICE_IDENTITY["employee_id"]
+        if self.device_identity:
+            self.device_id = self.device_identity["device_id"]
+            self.employee_id = self.device_identity["employee_id"]
             print(f"[+] Reconnecting to device {self.device_id} (employee #{self.employee_id}) — no re-enrollment needed")
             return True
 
@@ -117,15 +151,12 @@ class EndpointAgent:
         return False
 
     def start(self):
-        backend_label = (
-            ENROLLMENT["backend_url"] if ENROLLMENT
-            else (DEVICE_IDENTITY or {}).get("backend_url", "?")
-        )
+        backend_label = get_backend_url()
         print(f"[*] ThreatVista Endpoint Agent starting (backend: {backend_label})")
-        if ENROLLMENT:
-            print(f"[*] Found enrollment config at: {ENROLLMENT['path']}")
+        if self.enrollment:
+            print(f"[*] Found enrollment config at: {self.enrollment['path']}")
 
-        if not (ENROLLMENT or DEVICE_IDENTITY):
+        if not (self.enrollment or self.device_identity):
             print("[!] This laptop is not enrolled yet.")
             print("    1. Log in to ThreatVista in a browser.")
             print("    2. Open your profile and click 'Connect This Device'.")
@@ -133,12 +164,11 @@ class EndpointAgent:
             print("    4. Run start_agent.bat again.")
             return
 
-        if not check_backend_health():
-            print("[!] Backend not reachable. Start the ThreatVista backend, then run this again.")
-            print("    Events are NOT queued locally, so nothing will be sent while offline.")
+        if not self._ensure_backend_connected():
+            print("[!] Backend unreachable. Agent exiting.")
             return
 
-        print("[+] Backend connected.")
+        print(f"[+] Backend connected ({get_backend_url()}).")
         if not self._register():
             return  # token rejected / no identity — do not monitor under a wrong employee
 
@@ -235,5 +265,16 @@ class EndpointAgent:
         print("\n[*] Stopping endpoint agent...")
 
 if __name__ == "__main__":
-    agent = EndpointAgent()
+    cli_url = None
+    if len(sys.argv) > 1:
+        args = sys.argv[1:]
+        for i, arg in enumerate(args):
+            if arg in ("--backend-url", "-b", "--url") and i + 1 < len(args):
+                cli_url = args[i + 1]
+                break
+            elif not arg.startswith("-"):
+                cli_url = arg
+                break
+
+    agent = EndpointAgent(backend_url_override=cli_url)
     agent.start()

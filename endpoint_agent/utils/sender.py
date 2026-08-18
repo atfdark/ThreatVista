@@ -3,18 +3,32 @@ import requests
 import json
 from datetime import datetime
 
-def _resolve_api_base_url():
-    """Backend API base URL, from BACKEND_URL if set (LAN demo) else localhost.
-
-    Accepts either the full API root (http://host:8000/api) or just the server
-    root (http://host:8000), appending "/api" as needed.
-    """
-    url = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000/api").rstrip("/")
+def _normalize_url(raw_url: str) -> str:
+    url = (raw_url or "").strip().rstrip("/")
+    if not url:
+        return "http://127.0.0.1:8000/api"
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = f"http://{url}"
     if not url.endswith("/api"):
         url += "/api"
     return url
 
+def _resolve_api_base_url():
+    """Backend API base URL, from BACKEND_URL if set (LAN demo) else localhost."""
+    return _normalize_url(os.environ.get("BACKEND_URL", "http://127.0.0.1:8000/api"))
+
 API_BASE_URL = _resolve_api_base_url()
+
+def set_backend_url(raw_url: str) -> str:
+    """Dynamically set or update the backend URL for all API calls."""
+    global API_BASE_URL
+    API_BASE_URL = _normalize_url(raw_url)
+    os.environ["BACKEND_URL"] = get_backend_url()
+    return API_BASE_URL
+
+def get_backend_url() -> str:
+    """Return backend base URL without the trailing /api."""
+    return API_BASE_URL[:-4] if API_BASE_URL.endswith("/api") else API_BASE_URL
 
 # Optional shared secret. If the backend is configured with THREATVISTA_AGENT_KEY,
 # events must carry the matching X-Agent-Key header.
@@ -68,9 +82,10 @@ def send_event_batch(events: list):
         print(f"Failed to send event batch ({len(events)} events): {e}")
         return False
 
-def check_backend_health():
+def check_backend_health(target_url: str = None):
+    url_to_test = _normalize_url(target_url) if target_url else API_BASE_URL
     try:
-        response = requests.get(f"{API_BASE_URL}/status", timeout=2)
+        response = requests.get(f"{url_to_test}/status", timeout=3)
         return response.status_code == 200
     except Exception:
         return False
