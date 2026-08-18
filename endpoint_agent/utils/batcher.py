@@ -31,15 +31,16 @@ class EventBatcher:
 
     def add(self, event):
         """Queue one event. Safe to call from any monitor thread."""
+        is_urgent = bool(event.get("urgent") or event.get("event_type") in ("usb_insert", "usb_remove"))
         with self._lock:
             if not self._buffer:
                 self._first_event_time = time.time()
             self._buffer.append(event)
-            if len(self._buffer) >= self._max_events:
+            if is_urgent or len(self._buffer) >= self._max_events:
                 self._wake.set()
 
     def flush(self):
-        """Immediately send whatever is buffered (used on shutdown)."""
+        """Immediately send whatever is buffered (used on shutdown or urgent alert)."""
         batch = self._take_batch()
         if batch:
             self._send(batch)
@@ -63,14 +64,15 @@ class EventBatcher:
     def _run(self):
         while not self._stop.is_set():
             # Wake on a short tick so a sparse batch still flushes ~0.5s after
-            # its first event. The 0.1s granularity keeps the cadence snappy.
-            self._wake.wait(timeout=0.1)
+            # its first event. The 0.05s granularity keeps urgent events instant.
+            self._wake.wait(timeout=0.05)
             self._wake.clear()
             with self._lock:
                 if not self._buffer:
                     continue
+                has_urgent = any(e.get("urgent") for e in self._buffer)
                 elapsed = time.time() - self._first_event_time
-                if len(self._buffer) < self._max_events and elapsed < self._flush_interval:
+                if not has_urgent and len(self._buffer) < self._max_events and elapsed < self._flush_interval:
                     continue
                 batch = self._buffer
                 self._buffer = []
@@ -83,3 +85,4 @@ class EventBatcher:
             self._flush_callback(batch)
         except Exception as exc:
             print(f"[batch] send failed for {len(batch)} events: {exc}")
+

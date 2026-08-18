@@ -35,14 +35,20 @@ class AIPipeline:
         self.risk = RiskEngine()
         self.xai = ExplainableAI()
 
-    def run(self, raw_events: List[dict], employee_id: int, thresholds: Optional[Dict] = None) -> Dict:
+    def run(
+        self,
+        raw_events: List[dict],
+        employee_id: int,
+        thresholds: Optional[Dict] = None,
+        role_type: str = "General",
+    ) -> Dict:
         cleaned = preprocess_events(raw_events)
-        features = engineer_features(cleaned, employee_id)
+        features = engineer_features(cleaned, employee_id, role_type=role_type)
         baseline = self.dna.compute_baseline(employee_id, cleaned)
         deviations = self.dna.deviation_scores(features, baseline)
         anomalies = self.model.predict(features)
         correlations = self.corr.correlate(_correlation_event_window(cleaned), features)
-        risk = self.risk.calculate(features, anomalies, correlations, deviations, thresholds)
+        risk = self.risk.calculate(features, anomalies, correlations, deviations, thresholds, role_type=role_type)
         explanation = self.xai.explain(features, baseline, anomalies, risk, correlations)
         return {
             "features": features,

@@ -30,13 +30,15 @@ _ai_pipeline = AIPipeline()
 
 def run_ai_for_employee(db: Session, employee_id: int) -> dict:
     """Run the full AI pipeline for an employee's whole event history."""
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    role_type = emp.role_type if emp and emp.role_type else "General"
     events = db.query(models.Event).filter(models.Event.employee_id == employee_id).all()
     raw = [{"id": e.id, "event_type": e.event_type, "timestamp": e.timestamp.isoformat() if e.timestamp else None,
             "size": e.size, "extension": e.extension, "folder": e.folder, "usb_status": e.usb_status,
             "network_upload": e.network_upload, "cpu_usage": e.cpu_usage, "ram_usage": e.ram_usage,
             "details": e.details} for e in events]
     thresholds = get_thresholds(db)
-    return _ai_pipeline.run(raw, employee_id, thresholds)
+    return _ai_pipeline.run(raw, employee_id, thresholds, role_type=role_type)
 
 
 def build_incident_evidence_and_hint(
@@ -51,16 +53,40 @@ def build_incident_evidence_and_hint(
         evidence.append({
             "title": f"{inc.get('name', 'Burst activity')} ({inc.get('count', 0)} events)",
             "detail": inc.get("reason", ""),
+            "type": "evidence"
         })
     for corr in result.get("correlations") or []:
-        evidence.append({"title": corr["name"], "detail": corr.get("reason", "")})
+        evidence.append({"title": corr["name"], "detail": corr.get("reason", ""), "type": "evidence"})
     for alert in batch_alerts or []:
         alert_emp_id = getattr(alert, "employee_id", None) or alert.get("employee_id")
         if employee_id is not None and alert_emp_id != employee_id:
             continue
         reason = getattr(alert, "reason", None) or alert.get("reason", "")
         severity = getattr(alert, "severity", None) or alert.get("severity", "")
-        evidence.append({"title": f"Alert: {reason}", "detail": severity})
+        evidence.append({"title": f"Alert: {reason}", "detail": severity, "type": "evidence"})
+
+    # Check for role-based triggers in AI reasoning
+    reasons = (result.get("explanation", {}) or {}).get("reasons", [])
+    for r in reasons:
+        if any(k in r.lower() for k in ["role is", "unusual for this department", "abnormal for", "severe risk", "role baseline"]):
+            evidence.append({
+                "title": "Role Baseline Triggered",
+                "detail": r,
+                "type": "role_baseline"
+            })
+
+    # Check for sensitive company asset detection matches
+    features = result.get("features") or {}
+    sensitive_matches = features.get("sensitive_matches") or []
+    for m in sensitive_matches[:5]:
+        kw_str = ", ".join(m.get("matched_keywords", []))
+        fname = m.get("filename", "file")
+        risk_add = m.get("risk_added", 10)
+        evidence.append({
+            "title": "Sensitive File Detected",
+            "detail": f"File: {fname} | Matched: {kw_str} | Risk Added: +{risk_add}",
+            "type": "sensitive_asset"
+        })
 
     correlations = result.get("correlations") or []
     if correlations:

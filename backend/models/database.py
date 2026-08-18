@@ -20,6 +20,7 @@ class Employee(Base):
     name = Column(String, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     department = Column(String, nullable=False)
+    role_type = Column(String, default="General", nullable=False)
     photo_url = Column(String, nullable=True)
     risk_score = Column(Integer, default=0)
     status = Column(String, default="Normal")  # Normal, Suspicious, High Risk
@@ -278,3 +279,21 @@ class Incident(Base):
     active = Column(Boolean, default=True)                       # True only for ACTIVE/INVESTIGATING
 
     employee = relationship("Employee", back_populates="incidents")
+
+
+class SensitiveKeyword(Base):
+    """Company-sensitive keywords defined by SOC administrators.
+
+    Matches in filename, folder, or extension flag telemetry events for
+    Sensitive Asset Movement alerts and risk escalation.
+    """
+    __tablename__ = "sensitive_keywords"
+
+    id = Column(Integer, primary_key=True, index=True)
+    keyword = Column(String, unique=True, index=True, nullable=False)
+    category = Column(String, default="General", nullable=False)  # Financial | HR | Intellectual Property | Strategic | General
+    risk_weight = Column(Integer, default=10, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

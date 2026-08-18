@@ -1,0 +1,203 @@
+{
+  "roles": {
+    "Developer": {
+      "display_name": "Developer",
+      "description": "Software engineering & development staff. High file creation and source code modifications are standard.",
+      "common_extensions": [".py", ".js", ".ts", ".jsx", ".tsx", ".cpp", ".c", ".h", ".hpp", ".java", ".go", ".rs", ".cs", ".php", ".rb", ".html", ".css", ".scss", ".json", ".yaml", ".yml", ".xml", ".sql", ".md", ".sh", ".bash", ".bat", ".ps1", ".env", ".gitignore", ".lock"],
+      "suspicious_extensions": [".kdbx", ".key", ".pem", ".dwg"],
+      "max_normal_file_copies_24h": 300,
+      "max_normal_file_creates_24h": 300,
+      "max_normal_file_modifies_24h": 500,
+      "source_code_normal": true,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 10,
+        "source_code_copy_risk": 15,
+        "zip_copy_risk": 15,
+        "process_burst_risk": 10
+      },
+      "explanations": {
+        "mass_files": "Risk adjusted for Developer role: mass file operations (+10) are standard during software compilation and version control workflows.",
+        "source_code_transfer": "Source code access (+15) matches baseline development workflow.",
+        "role_context": "Developer baseline active: high code modification tolerance."
+      }
+    },
+    "HR": {
+      "display_name": "HR",
+      "description": "Human Resources department. Document and spreadsheet operations are common; source code and mass file operations are abnormal.",
+      "common_extensions": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".rtf", ".pptx", ".ppt", ".png", ".jpg", ".jpeg"],
+      "suspicious_extensions": [".py", ".js", ".ts", ".cpp", ".c", ".java", ".go", ".rs", ".sql", ".sh", ".bash", ".exe", ".dll", ".ps1", ".kdbx", ".pem", ".key"],
+      "max_normal_file_copies_24h": 30,
+      "max_normal_file_creates_24h": 25,
+      "max_normal_file_modifies_24h": 50,
+      "source_code_normal": false,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 40,
+        "source_code_copy_risk": 40,
+        "zip_copy_risk": 35,
+        "process_burst_risk": 25
+      },
+      "explanations": {
+        "mass_files": "Risk increased (+40) because employee role is HR and mass file creation is unusual for this department.",
+        "source_code_transfer": "Abnormal source code file access detected for HR role (+40).",
+        "role_context": "HR baseline active: document-focused operations expected."
+      }
+    },
+    "Finance": {
+      "display_name": "Finance",
+      "description": "Finance and accounting personnel. Spreadsheet and report handling is normal; ZIP archives and source code operations are highly suspicious.",
+      "common_extensions": [".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc", ".tsv", ".txt"],
+      "suspicious_extensions": [".zip", ".tar", ".gz", ".7z", ".rar", ".py", ".js", ".sql", ".sh", ".exe", ".kdbx", ".key", ".pem"],
+      "max_normal_file_copies_24h": 40,
+      "max_normal_file_creates_24h": 35,
+      "max_normal_file_modifies_24h": 60,
+      "source_code_normal": false,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 40,
+        "source_code_copy_risk": 50,
+        "zip_copy_risk": 50,
+        "process_burst_risk": 25
+      },
+      "explanations": {
+        "mass_files": "Risk increased (+40): mass file operations are unusual for Finance role.",
+        "source_code_transfer": "Severe risk (+50): source code copying is abnormal for Finance department.",
+        "zip_archive": "Severe risk (+50): staging or copying ZIP archives is highly suspicious for Finance department.",
+        "role_context": "Finance baseline active: spreadsheet/CSV expected, archives & code strictly flagged."
+      }
+    },
+    "Sales": {
+      "display_name": "Sales",
+      "description": "Sales & business development. Presentation and customer sheets are common; scripts and massive file batches are abnormal.",
+      "common_extensions": [".pptx", ".ppt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".png", ".jpg"],
+      "suspicious_extensions": [".py", ".js", ".sql", ".sh", ".exe", ".zip", ".tar", ".kdbx", ".pem"],
+      "max_normal_file_copies_24h": 50,
+      "max_normal_file_creates_24h": 40,
+      "max_normal_file_modifies_24h": 70,
+      "source_code_normal": false,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 35,
+        "source_code_copy_risk": 45,
+        "zip_copy_risk": 35,
+        "process_burst_risk": 20
+      },
+      "explanations": {
+        "mass_files": "Risk increased (+35): high volume file operations exceed Sales baseline.",
+        "source_code_transfer": "Abnormal source code access detected for Sales role (+45).",
+        "role_context": "Sales baseline active: presentation and client data operations expected."
+      }
+    },
+    "Security Analyst": {
+      "display_name": "Security Analyst",
+      "description": "SOC and cyber defense personnel. Elevated process spawning, log queries, and diagnostic executions are normal.",
+      "common_extensions": [".log", ".txt", ".json", ".csv", ".pcap", ".pdf", ".docx", ".sh", ".ps1", ".py", ".yara", ".yaml", ".yml"],
+      "suspicious_extensions": [".kdbx"],
+      "max_normal_file_copies_24h": 120,
+      "max_normal_file_creates_24h": 100,
+      "max_normal_file_modifies_24h": 150,
+      "source_code_normal": true,
+      "high_process_activity_normal": true,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 15,
+        "source_code_copy_risk": 20,
+        "zip_copy_risk": 20,
+        "process_burst_risk": 0
+      },
+      "explanations": {
+        "mass_files": "Log & artifact generation (+15) conforms to Security Analyst duties.",
+        "process_burst": "High process activity is normal for Security Analyst role (0 risk penalty).",
+        "role_context": "Security Analyst baseline active: high process activity and tooling permitted."
+      }
+    },
+    "IT Support": {
+      "display_name": "IT Support",
+      "description": "Technical support and infrastructure administration. System utility execution and driver/tool operations are common.",
+      "common_extensions": [".msi", ".exe", ".bat", ".ps1", ".sh", ".inf", ".log", ".txt", ".cfg", ".ini", ".zip"],
+      "suspicious_extensions": [".kdbx", ".key"],
+      "max_normal_file_copies_24h": 150,
+      "max_normal_file_creates_24h": 120,
+      "max_normal_file_modifies_24h": 200,
+      "source_code_normal": true,
+      "high_process_activity_normal": true,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 15,
+        "source_code_copy_risk": 25,
+        "zip_copy_risk": 20,
+        "process_burst_risk": 5
+      },
+      "explanations": {
+        "mass_files": "File maintenance (+15) is consistent with IT Support role.",
+        "process_burst": "System process operations (+5) conform to IT administration tasks.",
+        "role_context": "IT Support baseline active: system management and maintenance allowed."
+      }
+    },
+    "Administrator": {
+      "display_name": "Administrator",
+      "description": "Enterprise system administrators. Broad system access, configuration changes, and process management are expected.",
+      "common_extensions": [".conf", ".cfg", ".ini", ".json", ".yaml", ".yml", ".xml", ".log", ".sql", ".sh", ".ps1", ".bat", ".zip", ".tar.gz"],
+      "suspicious_extensions": [],
+      "max_normal_file_copies_24h": 200,
+      "max_normal_file_creates_24h": 180,
+      "max_normal_file_modifies_24h": 300,
+      "source_code_normal": true,
+      "high_process_activity_normal": true,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 15,
+        "source_code_copy_risk": 20,
+        "zip_copy_risk": 20,
+        "process_burst_risk": 5
+      },
+      "explanations": {
+        "mass_files": "Administrative file operations (+15) match system maintenance profile.",
+        "process_burst": "Administrative process execution (+5) conforms to system management baseline.",
+        "role_context": "Administrator baseline active: enterprise configuration permissions active."
+      }
+    },
+    "Manager": {
+      "display_name": "Manager",
+      "description": "Management & executive leadership. Reviewing summary documents, spreadsheets, and presentations is standard.",
+      "common_extensions": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".txt"],
+      "suspicious_extensions": [".py", ".js", ".cpp", ".c", ".sh", ".exe", ".kdbx", ".pem", ".key"],
+      "max_normal_file_copies_24h": 40,
+      "max_normal_file_creates_24h": 30,
+      "max_normal_file_modifies_24h": 60,
+      "source_code_normal": false,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 35,
+        "source_code_copy_risk": 45,
+        "zip_copy_risk": 30,
+        "process_burst_risk": 20
+      },
+      "explanations": {
+        "mass_files": "Mass file operations (+35) exceed expected Manager review volume.",
+        "source_code_transfer": "Abnormal source code file access for Manager role (+45).",
+        "role_context": "Manager baseline active: executive document review profile."
+      }
+    },
+    "General": {
+      "display_name": "General",
+      "description": "Default baseline profile for general employees with standard corporate behavioral bounds.",
+      "common_extensions": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".txt", ".png", ".jpg"],
+      "suspicious_extensions": [".kdbx", ".pem", ".key", ".sh", ".exe"],
+      "max_normal_file_copies_24h": 50,
+      "max_normal_file_creates_24h": 40,
+      "max_normal_file_modifies_24h": 80,
+      "source_code_normal": false,
+      "high_process_activity_normal": false,
+      "risk_modifiers": {
+        "mass_file_creation_risk": 30,
+        "source_code_copy_risk": 30,
+        "zip_copy_risk": 25,
+        "process_burst_risk": 15
+      },
+      "explanations": {
+        "mass_files": "Mass file operations (+30) detected outside standard general baseline.",
+        "source_code_transfer": "Source code file operations (+30) flagged for general corporate role.",
+        "role_context": "General baseline active: standard corporate thresholds."
+      }
+    }
+  }
+}

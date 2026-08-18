@@ -27,56 +27,112 @@ const WS_URL = resolveWsUrl();
  * render does NOT tear down and reopen the socket (which previously leaked a
  * flood of connections to the backend).
  */
-export function useWebSocket(onMessage) {
+export function useWebSocket(onMessage, onReconnect = null) {
   const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connected' | 'reconnecting' | 'disconnected'
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
+  const onReconnectRef = useRef(onReconnect);
+  const reconnectTimeoutRef = useRef(null);
+  const retryCountRef = useRef(0);
+  const isUnmountedRef = useRef(false);
 
-  // Always point at the latest handler without reconnecting.
+  // Always point at the latest handlers without reconnecting.
   onMessageRef.current = onMessage;
+  onReconnectRef.current = onReconnect;
 
   useEffect(() => {
-    let socket = null;
-    try {
-      socket = new WebSocket(WS_URL);
-      wsRef.current = socket;
+    isUnmountedRef.current = false;
 
-      socket.onopen = () => {
-        setIsConnected(true);
-        console.log('[WS] Connected to ThreatVista backend');
-      };
+    function connect() {
+      if (isUnmountedRef.current) return;
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (onMessageRef.current) onMessageRef.current(data);
-        } catch (e) {
-          console.error('[WS] Failed to parse message', e);
+      let socket = null;
+      try {
+        setConnectionStatus(retryCountRef.current === 0 ? 'connecting' : 'reconnecting');
+        socket = new WebSocket(WS_URL);
+        wsRef.current = socket;
+
+        socket.onopen = () => {
+          if (isUnmountedRef.current) return;
+          setIsConnected(true);
+          setConnectionStatus('connected');
+          const wasReconnected = retryCountRef.current > 0;
+          retryCountRef.current = 0;
+          console.log('[WS] Connected to ThreatVista backend');
+
+          if (wasReconnected && onReconnectRef.current) {
+            try {
+              onReconnectRef.current();
+            } catch (err) {
+              console.error('[WS] Reconnect sync error:', err);
+            }
+          }
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (onMessageRef.current) onMessageRef.current(data);
+          } catch (e) {
+            console.error('[WS] Failed to parse message', e);
+          }
+        };
+
+        socket.onclose = () => {
+          if (isUnmountedRef.current) return;
+          setIsConnected(false);
+          setConnectionStatus('reconnecting');
+          scheduleReconnect();
+        };
+
+        socket.onerror = (error) => {
+          if (isUnmountedRef.current) return;
+          console.warn('[WS] Socket error, retrying...');
+          setIsConnected(false);
+          setConnectionStatus('reconnecting');
+          if (socket) {
+            socket.close();
+          }
+        };
+      } catch (e) {
+        if (!isUnmountedRef.current) {
+          setIsConnected(false);
+          setConnectionStatus('reconnecting');
+          scheduleReconnect();
         }
-      };
-
-      socket.onclose = () => {
-        setIsConnected(false);
-        console.log('[WS] Disconnected');
-      };
-
-      socket.onerror = (error) => {
-        console.error('[WS] Error', error);
-        setIsConnected(false);
-      };
-    } catch (e) {
-      console.error('[WS] Failed to connect', e);
+      }
     }
 
-    return () => {
-      if (socket) {
-        socket.close();
+    function scheduleReconnect() {
+      if (isUnmountedRef.current) return;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
       }
-      if (wsRef.current === socket) {
+
+      // Exponential backoff: 1s, 2s, 4s, up to max 8s
+      const delay = Math.min(1000 * Math.pow(1.8, retryCountRef.current), 8000);
+      retryCountRef.current += 1;
+
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect();
+      }, delay);
+    }
+
+    connect();
+
+    return () => {
+      isUnmountedRef.current = true;
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, []); // connect once on mount
+  }, []); // connect on mount and auto-manage lifecycle
 
-  return { isConnected, ws: wsRef.current };
+  return { isConnected, connectionStatus, ws: wsRef.current };
 }
+

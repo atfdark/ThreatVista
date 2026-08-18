@@ -59,6 +59,9 @@ const emptyEmployeeDetail = (id) => ({
   name: "Unknown Employee",
   email: "unknown@threatvista.com",
   department: "Unknown",
+  role_type: "General",
+  role_baseline: null,
+  last_triggered_rule: "Standard Monitoring",
   risk_score: 0,
   status: "Normal",
   photo_url: null,
@@ -70,7 +73,9 @@ const emptyEmployeeDetail = (id) => ({
   },
   events: [],
   alerts: [],
-  risk_scores: []
+  risk_scores: [],
+  sensitive_files_accessed: [],
+  top_matched_keywords: []
 });
 
 const EMPTY_INCIDENT = {
@@ -193,6 +198,46 @@ export const api = {
     }
   },
 
+  // --- Employee Role Management & Baselines ---
+  updateEmployeeRole: async (employeeId, roleType) => {
+    const res = await http.patch(`/employees/${employeeId}/role`, { role_type: roleType });
+    return res.data;
+  },
+
+  getRoleBaselines: async () => {
+    try {
+      const res = await http.get(`/roles/baselines`);
+      return res.data;
+    } catch {
+      return {};
+    }
+  },
+
+  // --- Company Sensitive Asset Keywords ---
+  getSensitiveKeywords: async () => {
+    try {
+      const res = await http.get(`/sensitive-keywords`);
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  createSensitiveKeyword: async (keywordData) => {
+    const res = await http.post(`/sensitive-keywords`, keywordData);
+    return res.data;
+  },
+
+  updateSensitiveKeyword: async (keywordId, keywordData) => {
+    const res = await http.put(`/sensitive-keywords/${keywordId}`, keywordData);
+    return res.data;
+  },
+
+  deleteSensitiveKeyword: async (keywordId) => {
+    const res = await http.delete(`/sensitive-keywords/${keywordId}`);
+    return res.data;
+  },
+
   // --- Settings (persisted to backend) ---
   getSettings: async () => {
     try {
@@ -208,9 +253,29 @@ export const api = {
     return res.data;
   },
 
-  // --- Alert status transitions (persisted to backend) ---
-  updateAlertStatus: async (alertId, status) => {
-    const res = await http.patch(`/alerts/${alertId}`, { status });
+  // --- Alert status transitions & EDR responses (persisted & audited) ---
+  updateAlertStatus: async (alertId, status, reason = null) => {
+    const res = await http.patch(`/alerts/${alertId}`, { status, reason });
+    return res.data;
+  },
+
+  acknowledgeAlert: async (alertId) => {
+    const res = await http.post(`/alerts/${alertId}/acknowledge`);
+    return res.data;
+  },
+
+  investigateAlert: async (alertId) => {
+    const res = await http.post(`/alerts/${alertId}/investigate`);
+    return res.data;
+  },
+
+  blockUsbAlert: async (alertId) => {
+    const res = await http.post(`/alerts/${alertId}/block-usb`);
+    return res.data;
+  },
+
+  resolveAlert: async (alertId, reason = 'Resolved by administrator') => {
+    const res = await http.post(`/alerts/${alertId}/resolve`, { reason });
     return res.data;
   },
 

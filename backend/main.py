@@ -52,6 +52,17 @@ app.include_router(api_router, prefix="/api")
 # models are all registered by the time the router import chain has run, so
 # the new `incidents` table appears in existing SQLite DBs without re-seeding.
 Base.metadata.create_all(bind=engine)
+try:
+    from backend.database.db_setup import ensure_employee_role_column, ensure_sensitive_keywords
+    from backend.database.connection import SessionLocal
+    _db = SessionLocal()
+    try:
+        ensure_employee_role_column(_db)
+        ensure_sensitive_keywords(_db)
+    finally:
+        _db.close()
+except Exception as _e:
+    pass
 
 if __name__ == "__main__":
     import uvicorn

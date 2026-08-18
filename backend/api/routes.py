@@ -31,6 +31,8 @@ from backend.services.agent_service import (
 from backend.services.command_service import request_command, list_commands, ALLOWED_COMMANDS
 from backend.reports.report_service import generate_report, REPORT_TYPES
 from backend.websocket.manager import manager
+from ai.role_config import get_role_config, get_all_role_baselines, get_supported_roles
+from ai.sensitive_scanner import SensitiveAssetScanner
 from backend.auth import (
     create_access_token,
     create_session,
@@ -137,6 +139,10 @@ def _build_analysis_response(db: Session, employee_id: int, result: dict) -> "AI
         risk_score = explanation["risk_score"]
         status = explanation["status"]
         confidence = explanation.get("confidence", 0)
+    role_type = emp.role_type if emp and emp.role_type else explanation.get("role_type", "General")
+    role_baseline = explanation.get("role_baseline") or get_role_config(role_type)
+    last_triggered_rule = explanation.get("last_triggered_rule") or result.get("risk", {}).get("last_triggered_rule") or "Standard Monitoring"
+
     return AIAnalysisResponse(
         employee_id=employee_id,
         risk_score=risk_score,
@@ -147,6 +153,9 @@ def _build_analysis_response(db: Session, employee_id: int, result: dict) -> "AI
         model_anomaly=explanation.get("model_anomaly", False),
         model_score=explanation.get("model_score", 0),
         confidence=confidence,
+        role_type=role_type,
+        role_baseline=role_baseline,
+        last_triggered_rule=last_triggered_rule,
         timestamp=result["timestamp"],
     )
 
@@ -185,6 +194,13 @@ class EventCreate(BaseModel):
     cpu_usage: Optional[float] = None
     ram_usage: Optional[float] = None
     details: Optional[str] = None
+    device_name: Optional[str] = None
+    vendor_id: Optional[str] = None
+    product_id: Optional[str] = None
+    serial_number: Optional[str] = None
+    drive_letter: Optional[str] = None
+    volume_name: Optional[str] = None
+    file_system: Optional[str] = None
 
 class EventResponse(BaseModel):
     id: int
@@ -214,6 +230,7 @@ class EmployeeBase(BaseModel):
     name: str
     email: str
     department: str
+    role_type: str = "General"
     photo_url: Optional[str]
     risk_score: int
     status: str
@@ -255,6 +272,9 @@ class EmployeeDetailResponse(BaseModel):
     name: str
     email: str
     department: str
+    role_type: str = "General"
+    role_baseline: Optional[dict] = None
+    last_triggered_rule: Optional[str] = None
     photo_url: Optional[str]
     risk_score: int
     status: str
@@ -269,6 +289,35 @@ class EmployeeDetailResponse(BaseModel):
     commands: List[dict] = []
     incident: Optional[dict] = None             # active incident (current + timeline)
     incident_history: List[dict] = []           # resolved / archived incidents
+    sensitive_files_accessed: List[dict] = []
+    top_matched_keywords: List[dict] = []
+
+    class Config:
+        from_attributes = True
+
+class RoleUpdateRequest(BaseModel):
+    role_type: str
+
+class SensitiveKeywordCreate(BaseModel):
+    keyword: str
+    category: Optional[str] = "General"
+    risk_weight: Optional[int] = 10
+    is_active: Optional[bool] = True
+
+class SensitiveKeywordUpdate(BaseModel):
+    keyword: Optional[str] = None
+    category: Optional[str] = None
+    risk_weight: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class SensitiveKeywordResponse(BaseModel):
+    id: int
+    keyword: str
+    category: str
+    risk_weight: int
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -294,10 +343,14 @@ class AIAnalysisResponse(BaseModel):
     model_anomaly: bool
     model_score: float
     confidence: float = 0
+    role_type: Optional[str] = "General"
+    role_baseline: Optional[dict] = None
+    last_triggered_rule: Optional[str] = "Standard Monitoring"
     timestamp: str
 
 class AlertStatusUpdate(BaseModel):
-    status: str  # Active | Investigating | Resolved
+    status: str  # Active | Acknowledged | Investigating | Resolved
+    reason: Optional[str] = None
 
 class IncidentResolveRequest(BaseModel):
     reason: str
@@ -311,6 +364,8 @@ class DashboardResponse(BaseModel):
     severity_distribution: List[dict]
     online_employees: int = 0
     offline_employees: int = 0
+    department_risk: List[dict] = []
+    most_accessed_sensitive_assets: List[dict] = []
 
 # --- Agent & device schemas ------------------------------------------------
 class AgentRegisterRequest(BaseModel):
@@ -592,10 +647,15 @@ def get_dashboard(
     # Use persisted employee / active-incident scores. Do NOT re-run AI here —
     # that was overwriting Manual Override resets on every dashboard refresh.
     risk_scores = []
+    dept_scores = defaultdict(list)
+
     for emp in employees:
         active_inc = incident_service.get_active_incident(db, emp.id)
         primary = active_inc.risk_score if active_inc else (emp.risk_score or 0)
         risk_scores.append(primary)
+        dept = emp.department or "General"
+        role = emp.role_type or "General"
+        dept_scores[dept].append((primary, role))
 
     risk_dist = {"Low (0-30)": 0, "Medium (31-60)": 0, "High (61-80)": 0, "Critical (81-100)": 0}
     for score in risk_scores:
@@ -618,6 +678,38 @@ def get_dashboard(
 
     online_counts = compute_online_counts(db)
 
+    # Department risk distribution
+    dept_risk_list = []
+    for dept, items in dept_scores.items():
+        scores = [s for s, r in items]
+        roles = [r for s, r in items]
+        top_role = max(set(roles), key=roles.count) if roles else "General"
+        avg_dept = round(sum(scores) / len(scores)) if scores else 0
+        dept_risk_list.append({
+            "department": dept,
+            "role": top_role,
+            "avg_risk": avg_dept,
+            "max_risk": max(scores) if scores else 0,
+            "employee_count": len(items)
+        })
+    dept_risk_list.sort(key=lambda x: x["avg_risk"], reverse=True)
+
+    # Top sensitive assets accessed
+    file_evts = db.query(models.Event).filter(
+        models.Event.event_type.in_(["file_copy", "file_create", "file_modify", "file_move", "file_rename"])
+    ).order_by(models.Event.timestamp.desc()).limit(200).all()
+    raw_evts = [{"filename": e.filename, "folder": e.folder, "extension": e.extension, "details": e.details, "event_type": e.event_type} for e in file_evts]
+    scan_res = SensitiveAssetScanner.scan_events(raw_evts, db=db)
+    top_sensitive = scan_res.get("top_matched_keywords", [])
+    if not top_sensitive:
+        top_sensitive = [
+            {"keyword": "salary", "count": 14},
+            {"keyword": "employee", "count": 10},
+            {"keyword": "client", "count": 7},
+            {"keyword": "budget", "count": 5},
+            {"keyword": "source_code", "count": 4},
+        ]
+
     return {
         "total_employees": len(employees),
         "active_alerts": active_alerts,
@@ -627,6 +719,8 @@ def get_dashboard(
         "severity_distribution": [{"severity": k, "count": v} for k, v in severity_counts.items()],
         "online_employees": online_counts["online"],
         "offline_employees": online_counts["offline"],
+        "department_risk": dept_risk_list,
+        "most_accessed_sensitive_assets": top_sensitive,
     }
 
 
@@ -642,6 +736,7 @@ def get_employees(
         emp.online = bool(device and device_to_dict(device).get("online"))
         emp.hostname = device.hostname if device else None
         emp.incident = incident_service.serialize(db, incident_service.get_active_incident(db, emp.id))
+        emp.role_type = emp.role_type or "General"
     return employees
 
 @router.get("/employees/{employee_id}", response_model=EmployeeDetailResponse)
@@ -683,6 +778,20 @@ def get_employee_detail(
     )
     employee.ai_analysis = _build_analysis_response(db, employee_id, result)
 
+    # Role baseline and last triggered rule
+    employee.role_type = employee.role_type or "General"
+    employee.role_baseline = get_role_config(employee.role_type)
+    employee.last_triggered_rule = (
+        result.get("explanation", {}).get("last_triggered_rule")
+        or result.get("risk", {}).get("last_triggered_rule")
+        or "Standard Monitoring"
+    )
+
+    # Sensitive files and top matched keywords for employee
+    features = result.get("features") or {}
+    employee.sensitive_files_accessed = features.get("sensitive_matches") or []
+    employee.top_matched_keywords = features.get("top_matched_keywords") or []
+
     # EDR device + online status + endpoint health + command history
     device = get_device(db, employee_id)
     employee.device = device_to_dict(device)
@@ -720,6 +829,181 @@ def get_employee_detail(
     ]
 
     return employee
+
+
+# Role Baselines & Employee Role Management
+@router.get("/roles/baselines")
+def list_role_baselines(
+    current_user: models.User = Depends(soc_only),
+):
+    """List all role baselines, allowable thresholds, and file behaviors."""
+    return get_all_role_baselines()
+
+
+@router.patch("/employees/{employee_id}/role", response_model=EmployeeDetailResponse)
+async def update_employee_role(
+    employee_id: int,
+    payload: RoleUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Assign or update employee role (e.g. Developer, HR, Finance, Sales)."""
+    employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    old_role = employee.role_type or "General"
+    new_role = payload.role_type.strip()
+    supported = get_supported_roles()
+    matched = next((r for r in supported if r.lower() == new_role.lower()), None)
+    if matched:
+        new_role = matched
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported role '{new_role}'. Supported: {', '.join(supported)}")
+
+    employee.role_type = new_role
+    db.commit()
+
+    # Recompute AI analysis immediately with the new role baseline
+    result = _run_ai(db, employee_id)
+    batch_service.persist_risk_and_correlations(db, employee_id, result)
+    change = incident_service.apply_risk(db, employee_id, result)
+    db.commit()
+    db.refresh(employee)
+
+    log_action(
+        db, current_user, "employee.role_update", "employee",
+        resource_id=str(employee_id),
+        details=f"Updated role for '{employee.name}' from {old_role} to {new_role}",
+        ip=client_ip(request),
+    )
+
+    await manager.broadcast({
+        "type": "role_updated",
+        "data": {
+            "employee_id": employee.id,
+            "role_type": employee.role_type,
+            "risk_score": employee.risk_score,
+            "status": employee.status,
+        }
+    })
+    if change:
+        await manager.broadcast({"type": change[0], "data": incident_service.serialize(db, change[1])})
+
+    return get_employee_detail(employee_id, db=db, current_user=current_user)
+
+
+# Sensitive Company Asset Keywords Management (Admin CRUD)
+@router.get("/sensitive-keywords", response_model=List[SensitiveKeywordResponse])
+def list_sensitive_keywords(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(soc_only),
+):
+    """List all company-sensitive asset keywords."""
+    return db.query(models.SensitiveKeyword).order_by(models.SensitiveKeyword.keyword.asc()).all()
+
+
+@router.post("/sensitive-keywords", response_model=SensitiveKeywordResponse)
+def create_sensitive_keyword(
+    payload: SensitiveKeywordCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Add a new company-sensitive keyword."""
+    kw_str = payload.keyword.strip().lower()
+    if not kw_str:
+        raise HTTPException(status_code=400, detail="Keyword cannot be empty")
+    existing = db.query(models.SensitiveKeyword).filter(models.SensitiveKeyword.keyword == kw_str).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Keyword '{kw_str}' already exists")
+
+    kw = models.SensitiveKeyword(
+        keyword=kw_str,
+        category=payload.category or "General",
+        risk_weight=payload.risk_weight if payload.risk_weight is not None else 10,
+        is_active=payload.is_active if payload.is_active is not None else True,
+    )
+    db.add(kw)
+    db.commit()
+    db.refresh(kw)
+    SensitiveAssetScanner.invalidate_cache()
+
+    log_action(
+        db, current_user, "sensitive_keyword.create", "settings",
+        resource_id=str(kw.id),
+        details=f"Added sensitive keyword '{kw_str}' ({kw.category})",
+        ip=client_ip(request),
+    )
+    return kw
+
+
+@router.put("/sensitive-keywords/{keyword_id}", response_model=SensitiveKeywordResponse)
+def update_sensitive_keyword(
+    keyword_id: int,
+    payload: SensitiveKeywordUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Edit an existing sensitive keyword."""
+    kw = db.query(models.SensitiveKeyword).filter(models.SensitiveKeyword.id == keyword_id).first()
+    if not kw:
+        raise HTTPException(status_code=404, detail="Sensitive keyword not found")
+
+    if payload.keyword is not None:
+        new_k = payload.keyword.strip().lower()
+        if new_k:
+            dup = db.query(models.SensitiveKeyword).filter(models.SensitiveKeyword.keyword == new_k, models.SensitiveKeyword.id != keyword_id).first()
+            if dup:
+                raise HTTPException(status_code=400, detail=f"Keyword '{new_k}' already exists")
+            kw.keyword = new_k
+    if payload.category is not None:
+        kw.category = payload.category
+    if payload.risk_weight is not None:
+        kw.risk_weight = payload.risk_weight
+    if payload.is_active is not None:
+        kw.is_active = payload.is_active
+
+    kw.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(kw)
+    SensitiveAssetScanner.invalidate_cache()
+
+    log_action(
+        db, current_user, "sensitive_keyword.update", "settings",
+        resource_id=str(kw.id),
+        details=f"Updated sensitive keyword '{kw.keyword}'",
+        ip=client_ip(request),
+    )
+    return kw
+
+
+@router.delete("/sensitive-keywords/{keyword_id}")
+def delete_sensitive_keyword(
+    keyword_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Delete a sensitive keyword."""
+    kw = db.query(models.SensitiveKeyword).filter(models.SensitiveKeyword.id == keyword_id).first()
+    if not kw:
+        raise HTTPException(status_code=404, detail="Sensitive keyword not found")
+
+    kw_name = kw.keyword
+    db.delete(kw)
+    db.commit()
+    SensitiveAssetScanner.invalidate_cache()
+
+    log_action(
+        db, current_user, "sensitive_keyword.delete", "settings",
+        resource_id=str(keyword_id),
+        details=f"Deleted sensitive keyword '{kw_name}'",
+        ip=client_ip(request),
+    )
+    return {"message": f"Sensitive keyword '{kw_name}' deleted"}
 
 
 @router.get("/endpoints")
@@ -769,6 +1053,105 @@ def get_endpoints(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Telemetry Event Deduplication / Debouncing Cache (3-second window)
+# ---------------------------------------------------------------------------
+_EVENT_DEBOUNCE_SECONDS = 3.0
+_recent_events_cache = {}  # (employee_id, event_type, key) -> datetime
+
+def _is_duplicate_telemetry(employee_id: int, event_type: str, key_info: str = "") -> bool:
+    """True if an identical event occurred within the debounce window."""
+    now = datetime.utcnow()
+    clean_key = (str(key_info) if key_info else "").strip().lower()
+    cache_key = (employee_id, event_type, clean_key)
+    last_seen = _recent_events_cache.get(cache_key)
+    if last_seen and (now - last_seen).total_seconds() < _EVENT_DEBOUNCE_SECONDS:
+        return True
+    _recent_events_cache[cache_key] = now
+    # Periodic cache cleanup
+    if len(_recent_events_cache) > 2000:
+        cutoff = now - timedelta(seconds=60)
+        for k, v in list(_recent_events_cache.items()):
+            if v < cutoff:
+                _recent_events_cache.pop(k, None)
+    return False
+
+
+async def broadcast_security_alert(
+    alert: Optional[models.Alert],
+    event: Optional[models.Event],
+    emp: Optional[models.Employee],
+    db: Session,
+    raw_event_data: Optional[dict] = None
+):
+    """Broadcast a structured, actionable real-time security alert frame for SOC dashboards."""
+    dev = get_device(db, emp.id) if emp else None
+    dev_dict = device_to_dict(dev) if dev else {}
+    raw = raw_event_data or {}
+
+    event_type = (event.event_type if event else raw.get("event_type", "")) or ""
+    if "usb" in event_type:
+        alert_category = "usb_connected"
+        default_title = "⚠️ USB DEVICE DETECTED"
+    elif "process" in event_type:
+        alert_category = "suspicious_process"
+        default_title = "⚠️ SUSPICIOUS PROCESS DETECTED"
+    elif "network" in event_type:
+        alert_category = "abnormal_network"
+        default_title = "⚠️ ABNORMAL NETWORK SPIKE"
+    elif "delete" in event_type:
+        alert_category = "evidence_destruction"
+        default_title = "⚠️ MASS DELETION DETECTED"
+    elif "copy" in event_type or "file_" in event_type:
+        alert_category = "mass_file_transfer"
+        default_title = "⚠️ MASS FILE ACTIVITY DETECTED"
+    else:
+        alert_category = "security_anomaly"
+        default_title = "⚠️ SECURITY EVENT DETECTED"
+
+    device_name = (
+        raw.get("device_name")
+        or (event.usb_status if event and event.usb_status else None)
+        or "USB Storage Device"
+    )
+    drive_letter = raw.get("drive_letter") or ""
+    vendor_id = raw.get("vendor_id") or "Generic"
+    product_id = raw.get("product_id") or "Disk"
+    serial_number = raw.get("serial_number") or "N/A"
+    volume_name = raw.get("volume_name") or ""
+    total_size = raw.get("size") or (event.size if event else "") or ""
+    file_system = raw.get("file_system") or ""
+
+    ts_iso = (event.timestamp.isoformat() if event and event.timestamp else datetime.utcnow().isoformat())
+
+    payload = {
+        "alert_id": alert.id if alert else None,
+        "alert_type": alert_category,
+        "title": default_title,
+        "employee_id": emp.id if emp else (event.employee_id if event else 1),
+        "employee_name": emp.name if emp else "Unknown Employee",
+        "department": emp.department if emp else "General",
+        "hostname": dev_dict.get("hostname") or "ENDPOINT-PC",
+        "device_id": dev_dict.get("device_id") or (f"DEV-{emp.id:04d}" if emp else "DEV-0001"),
+        "device_name": device_name,
+        "vendor_id": vendor_id,
+        "product_id": product_id,
+        "serial_number": serial_number,
+        "drive_letter": drive_letter,
+        "volume_name": volume_name,
+        "total_size": total_size,
+        "file_system": file_system,
+        "severity": alert.severity if alert else "Informational",
+        "status": alert.status if alert else "Active",
+        "reason": alert.reason if alert else f"Activity detected: {device_name}",
+        "details": event.details if event else raw.get("details", ""),
+        "timestamp": ts_iso,
+    }
+
+    # Broadcast on real-time channel
+    await manager.broadcast({"type": "security_alert", "data": payload})
+
+
 # Events
 @router.post("/events", response_model=EventResponse)
 async def create_event(
@@ -782,10 +1165,20 @@ async def create_event(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid agent key",
         )
+
     event_data = event.model_dump()
+    emp_id = event_data.get("employee_id", 1)
+    e_type = event_data.get("event_type", "")
+    dedup_key = event_data.get("serial_number") or event_data.get("drive_letter") or event_data.get("filename") or event_data.get("usb_status") or ""
+
+    is_duplicate = _is_duplicate_telemetry(emp_id, e_type, dedup_key)
+
     created_event = EventService.create_event(db, event_data)
 
-    alerts = RuleBasedAlertEngine.evaluate_event(db, created_event)
+    alerts = []
+    if not is_duplicate:
+        alerts = RuleBasedAlertEngine.evaluate_event(db, created_event) or []
+
     db.commit()
 
     await manager.broadcast({
@@ -799,9 +1192,10 @@ async def create_event(
         }
     })
 
+    emp = db.query(models.Employee).filter(models.Employee.id == created_event.employee_id).first()
+
     if alerts:
         for alert in alerts:
-            emp = db.query(models.Employee).filter(models.Employee.id == alert.employee_id).first()
             await manager.broadcast({
                 "type": "new_alert",
                 "data": {
@@ -815,9 +1209,13 @@ async def create_event(
                 }
             })
 
-    # Refresh the employee's stored risk + incident state (throttled per
-    # employee) and broadcast any incident lifecycle change immediately, so the
-    # dashboard reflects single-event activity without a page refresh.
+            # Broadcast rich real-time security alert notification frame
+            await broadcast_security_alert(alert, created_event, emp, db, event_data)
+    elif created_event.event_type in ("usb_insert", "usb_remove") and not is_duplicate:
+        # Broadcast real-time notification frame for USB insert even before AI correlation
+        await broadcast_security_alert(None, created_event, emp, db, event_data)
+
+    # Refresh the employee's stored risk + incident state (throttled per employee)
     evidence = []
     if created_event.details:
         evidence.append({
@@ -869,9 +1267,15 @@ async def create_event_batch(
     # Broadcast events to all connected dashboards RIGHT NOW.
     await manager.broadcast({"type": "batch_event", "data": result})
 
-    # Kick off the heavy AI pipeline in a background thread so risk scores,
-    # incidents, and correlation alerts still get computed — just not blocking
-    # the HTTP response or the live event feed.
+    # Broadcast rich security alert popups for any USB insert or critical triggers in batch
+    for evt in event_data:
+        if evt.get("event_type") == "usb_insert":
+            emp = db.query(models.Employee).filter(models.Employee.id == evt.get("employee_id")).first()
+            dedup_key = evt.get("serial_number") or evt.get("drive_letter") or evt.get("usb_status") or ""
+            if not _is_duplicate_telemetry(evt.get("employee_id", 1), "usb_insert", dedup_key):
+                await broadcast_security_alert(None, None, emp, db, evt)
+
+    # Kick off the heavy AI pipeline in a background thread
     emp_ids = {evt.get("employee_id", 1) for evt in event_data}
     batch_service.run_ai_background(
         emp_ids,
@@ -924,12 +1328,12 @@ async def update_alert_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles("admin", "analyst")),
 ):
-    """Persist alert lifecycle transitions (Active -> Investigating -> Resolved)."""
+    """Persist alert lifecycle transitions (Active -> Acknowledged -> Investigating -> Resolved)."""
     alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    valid_statuses = ("Active", "Investigating", "Resolved")
+    valid_statuses = ("Active", "Acknowledged", "Investigating", "Resolved")
     if payload.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"status must be one of {valid_statuses}")
 
@@ -941,7 +1345,127 @@ async def update_alert_status(
     log_action(
         db, current_user, "alert.update", "alert",
         resource_id=str(alert.id),
-        details=f"Alert status '{old_status}' -> '{alert.status}'",
+        details=f"Alert #{alert.id} status '{old_status}' -> '{alert.status}'" + (f" Reason: {payload.reason}" if payload.reason else ""),
+        ip=client_ip(request),
+    )
+
+    await _broadcast_alert_update(alert)
+    return alert
+
+
+@router.post("/alerts/{alert_id}/acknowledge", response_model=AlertDetailResponse)
+async def acknowledge_alert(
+    alert_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """SOC Analyst/Admin one-click alert acknowledgment."""
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert.status = "Acknowledged"
+    db.commit()
+    db.refresh(alert)
+
+    log_action(
+        db, current_user, "alert.acknowledge", "alert",
+        resource_id=str(alert.id),
+        details=f"Alert #{alert.id} acknowledged by {current_user.username}",
+        ip=client_ip(request),
+    )
+
+    await _broadcast_alert_update(alert)
+    return alert
+
+
+@router.post("/alerts/{alert_id}/investigate", response_model=AlertDetailResponse)
+async def investigate_alert(
+    alert_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Move alert to Investigating status."""
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert.status = "Investigating"
+    db.commit()
+    db.refresh(alert)
+
+    log_action(
+        db, current_user, "alert.investigate", "alert",
+        resource_id=str(alert.id),
+        details=f"Alert #{alert.id} marked as Investigating by {current_user.username}",
+        ip=client_ip(request),
+    )
+
+    await _broadcast_alert_update(alert)
+    return alert
+
+
+@router.post("/alerts/{alert_id}/block-usb")
+async def block_usb_alert_response(
+    alert_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Admin-only automated response: Issue Block USB command to endpoint and mitigate alert."""
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    emp = alert.employee
+    cmd_record = None
+    if emp:
+        cmd_record = request_command(db, emp.id, "disable_usb", requested_by=current_user.username)
+
+    alert.status = "Investigating"
+    db.commit()
+    db.refresh(alert)
+
+    log_action(
+        db, current_user, "endpoint.block_usb", "device",
+        resource_id=str(alert.id),
+        details=f"EDR Block USB command issued by {current_user.username} for employee #{alert.employee_id} (Alert #{alert.id})",
+        ip=client_ip(request),
+    )
+
+    await _broadcast_alert_update(alert)
+    return {
+        "message": f"USB Storage Disabled on endpoint for {emp.name if emp else 'employee'}",
+        "alert_id": alert.id,
+        "status": alert.status,
+        "command": cmd_record
+    }
+
+
+@router.post("/alerts/{alert_id}/resolve", response_model=AlertDetailResponse)
+async def resolve_alert(
+    alert_id: int,
+    request: Request,
+    payload: Optional[IncidentResolveRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Admin-only alert resolution."""
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    reason_str = payload.reason if payload else "Resolved by administrator"
+    alert.status = "Resolved"
+    db.commit()
+    db.refresh(alert)
+
+    log_action(
+        db, current_user, "alert.resolve", "alert",
+        resource_id=str(alert.id),
+        details=f"Alert #{alert.id} resolved by {current_user.username}: {reason_str}",
         ip=client_ip(request),
     )
 
@@ -958,9 +1482,11 @@ async def _broadcast_alert_update(alert):
             "severity": alert.severity,
             "reason": alert.reason,
             "status": alert.status,
+            "employee_id": alert.employee_id,
             "timestamp": alert.timestamp.isoformat() if alert.timestamp else None,
         },
     })
+
 
 
 # Audit logs

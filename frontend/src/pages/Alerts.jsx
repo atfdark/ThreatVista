@@ -165,6 +165,7 @@ export default function Alerts() {
             >
               <option value="All" className="bg-cyber-card">All Statuses</option>
               <option value="Active" className="bg-cyber-card">Active</option>
+              <option value="Acknowledged" className="bg-cyber-card">Acknowledged</option>
               <option value="Investigating" className="bg-cyber-card">Investigating</option>
               <option value="Resolved" className="bg-cyber-card">Resolved</option>
             </select>
@@ -206,7 +207,7 @@ export default function Alerts() {
                   </td>
                   <td className="py-4 whitespace-nowrap">
                     <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase font-medium ${
-                      alert.severity === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25 shadow-[0_0_8px_rgba(239,68,68,0.1)]' :
+                      alert.severity === 'Critical' || alert.severity === 'High' ? 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/25 shadow-[0_0_8px_rgba(239,68,68,0.1)]' :
                       alert.severity === 'Medium' ? 'text-cyber-warning bg-cyber-warning/10 border-cyber-warning/25' :
                       'text-cyber-secondary bg-cyber-secondary/10 border-cyber-secondary/25'
                     }`}>
@@ -219,11 +220,13 @@ export default function Alerts() {
                   <td className="py-4 whitespace-nowrap">
                     <span className={`text-[10px] uppercase font-bold flex items-center gap-1.5 ${
                       alert.status === 'Active' ? 'text-cyber-danger' :
+                      alert.status === 'Acknowledged' ? 'text-cyber-accent' :
                       alert.status === 'Investigating' ? 'text-cyber-warning' :
                       'text-cyber-success'
                     }`}>
                       <span className={`h-1.5 w-1.5 rounded-full ${
                         alert.status === 'Active' ? 'bg-cyber-danger animate-ping' :
+                        alert.status === 'Acknowledged' ? 'bg-cyber-accent animate-pulse' :
                         alert.status === 'Investigating' ? 'bg-cyber-warning animate-pulse' :
                         'bg-cyber-success'
                       }`}></span>
@@ -231,19 +234,46 @@ export default function Alerts() {
                     </span>
                   </td>
                   <td className="py-4 text-right pr-4 whitespace-nowrap">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end items-center gap-1.5">
                       {canAct && alert.status === 'Active' && (
+                        <button
+                          onClick={() => handleUpdateStatus(alert.id, 'Acknowledged')}
+                          className="px-2 py-1 bg-cyber-primary/15 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg rounded border border-cyber-primary/35 text-[10px] font-bold tracking-wider transition-all"
+                          title="Acknowledge alert"
+                        >
+                          ACKNOWLEDGE
+                        </button>
+                      )}
+                      {canAct && (alert.status === 'Active' || alert.status === 'Acknowledged') && (
                         <button
                           onClick={() => handleUpdateStatus(alert.id, 'Investigating')}
                           className="px-2 py-1 bg-cyber-warning/15 hover:bg-cyber-warning text-cyber-warning hover:text-cyber-bg rounded border border-cyber-warning/35 text-[10px] font-bold tracking-wider transition-all"
+                          title="Mark investigating"
                         >
                           INVESTIGATE
+                        </button>
+                      )}
+                      {role === 'admin' && alert.status !== 'Resolved' && alert.reason.toLowerCase().includes('usb') && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await api.blockUsbAlert(alert.id);
+                              loadAlerts(true);
+                            } catch (e) {
+                              setActionError('Failed to issue block USB command');
+                            }
+                          }}
+                          className="px-2 py-1 bg-cyber-danger/20 hover:bg-cyber-danger text-cyber-danger hover:text-white rounded border border-cyber-danger/40 text-[10px] font-bold tracking-wider transition-all"
+                          title="Issue EDR command to disable USB"
+                        >
+                          BLOCK USB
                         </button>
                       )}
                       {canAct && alert.status !== 'Resolved' && (
                         <button
                           onClick={() => handleUpdateStatus(alert.id, 'Resolved')}
                           className="px-2 py-1 bg-cyber-success/15 hover:bg-cyber-success text-cyber-success hover:text-cyber-bg rounded border border-cyber-success/35 text-[10px] font-bold tracking-wider transition-all"
+                          title="Resolve alert"
                         >
                           RESOLVE
                         </button>

@@ -21,6 +21,9 @@ class ExplainableAI:
             "model_anomaly": anomalies.get("is_anomaly", False),
             "model_score": anomalies.get("score", 0),
             "confidence": self._confidence(risk, deviations=deviation, anomalies=anomalies),
+            "role_type": risk.get("role_type", features.get("role_type", "General")),
+            "role_baseline": risk.get("role_baseline", features.get("role_config", {})),
+            "last_triggered_rule": risk.get("last_triggered_rule", "Standard Monitoring"),
         }
 
     def _confidence(self, risk: Dict, deviations: Dict, anomalies: Dict) -> int:

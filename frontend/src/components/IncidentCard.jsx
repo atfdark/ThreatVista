@@ -47,6 +47,8 @@ function Stat({ label, value, accent }) {
 const TIMELINE_DOT = {
   created: 'bg-cyber-primary',
   evidence: 'bg-cyber-accent',
+  role_baseline: 'bg-fuchsia-500',
+  sensitive_asset: 'bg-amber-500',
   risk_increase: 'bg-cyber-danger',
   status_change: 'bg-cyber-warning',
   resolved: 'bg-cyber-success',

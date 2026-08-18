@@ -53,8 +53,16 @@ def _build_event_payload(event_data: dict) -> dict:
         "network_upload": event_data.get("network_upload"),
         "cpu_usage": event_data.get("cpu_usage"),
         "ram_usage": event_data.get("ram_usage"),
-        "details": event_data.get("details")
+        "details": event_data.get("details"),
+        "device_name": event_data.get("device_name"),
+        "vendor_id": event_data.get("vendor_id"),
+        "product_id": event_data.get("product_id"),
+        "serial_number": event_data.get("serial_number"),
+        "drive_letter": event_data.get("drive_letter"),
+        "volume_name": event_data.get("volume_name"),
+        "file_system": event_data.get("file_system"),
     }
+
 
 
 def send_event(event_data: dict):

@@ -309,7 +309,7 @@ def apply_risk(
     if active is not None:
         changed = False
         for ev in evidence:
-            append_timeline(active, "evidence", ev.get("title", "New evidence"), ev.get("detail", ""))
+            append_timeline(active, ev.get("type", "evidence"), ev.get("title", "New evidence"), ev.get("detail", ""))
             changed = True
         if evidence and score > active.risk_score:
             append_timeline(active, "risk_increase", f"Risk increased: {active.risk_score} → {score}", "")
@@ -354,5 +354,5 @@ def apply_risk(
     db.flush()  # assign id so serialization works before the caller commits
     append_timeline(incident, "created", "Incident created", title)
     for ev in evidence:
-        append_timeline(incident, "evidence", ev.get("title", "New evidence"), ev.get("detail", ""))
+        append_timeline(incident, ev.get("type", "evidence"), ev.get("title", "New evidence"), ev.get("detail", ""))
     return ("incident_created", incident)

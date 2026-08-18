@@ -376,18 +376,33 @@ export default function Dashboard() {
             <thead>
               <tr className="border-b border-cyber-border text-cyber-muted uppercase font-mono text-[10px] tracking-wider">
                 <th className="pb-3 pl-4">Employee</th>
-                <th className="pb-3">Department</th>
+                <th className="pb-3">Role & Dept</th>
                 <th className="pb-3">Risk Assessment</th>
                 <th className="pb-3">Classification</th>
                 <th className="pb-3 text-right pr-4">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-cyber-border">
-              {employees.slice(0, 4).map((emp) => {
+              {employees.slice(0, 6).map((emp) => {
                 const incident = emp.incident || null;
                 const hasIncident = !!incident;
                 const riskScore = hasIncident ? incident.risk_score : emp.risk_score;
                 const status = hasIncident ? incident.severity : emp.status;
+                const roleType = emp.role_type || 'General';
+
+                const getRoleColor = (r) => {
+                  switch (r) {
+                    case 'Developer': return 'text-cyber-primary bg-cyber-primary/10 border-cyber-primary/30';
+                    case 'Finance': return 'text-amber-400 bg-amber-500/10 border-amber-500/30';
+                    case 'HR': return 'text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30';
+                    case 'Security Analyst': return 'text-cyber-secondary bg-cyber-secondary/10 border-cyber-secondary/30';
+                    case 'Administrator': return 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30';
+                    case 'IT Support': return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+                    case 'Sales': return 'text-blue-400 bg-blue-500/10 border-blue-500/30';
+                    default: return 'text-cyber-muted bg-cyber-bg border-cyber-border';
+                  }
+                };
+
                 return (
                   <tr key={emp.id} className="hover:bg-cyber-border/10 transition-colors group">
                     <td className="py-3.5 pl-4 flex items-center gap-3">
@@ -405,7 +420,14 @@ export default function Dashboard() {
                         <span className="text-[10px] text-cyber-muted font-mono">{emp.email}</span>
                       </div>
                     </td>
-                    <td className="py-3.5 font-medium text-cyber-muted">{emp.department}</td>
+                    <td className="py-3.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[9px] font-mono px-2 py-0.5 rounded border font-semibold uppercase ${getRoleColor(roleType)}`}>
+                          {roleType}
+                        </span>
+                        <span className="text-[11px] text-cyber-muted font-mono">{emp.department}</span>
+                      </div>
+                    </td>
                     <td className="py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="w-24 bg-cyber-bg border border-cyber-border h-2 rounded-full overflow-hidden">

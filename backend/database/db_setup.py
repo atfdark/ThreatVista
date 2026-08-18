@@ -50,6 +50,37 @@ def ensure_system_config(db):
         db.commit()
         print("[+] Seeded system configuration defaults.")
 
+def ensure_employee_role_column(db):
+    """Ensure role_type column exists on employees table in SQLite."""
+    try:
+        from sqlalchemy import text
+        res = db.execute(text("PRAGMA table_info(employees)")).fetchall()
+        col_names = [r[1] for r in res]
+        if "role_type" not in col_names and len(col_names) > 0:
+            db.execute(text("ALTER TABLE employees ADD COLUMN role_type VARCHAR DEFAULT 'General'"))
+            db.commit()
+            print("[+] Added role_type column to employees table.")
+    except Exception as e:
+        print(f"[!] Warning in ensure_employee_role_column: {e}")
+
+def ensure_sensitive_keywords(db):
+    """Ensure default company-sensitive keywords exist in database."""
+    from backend.models.database import SensitiveKeyword
+    from ai.sensitive_scanner import DEFAULT_SENSITIVE_KEYWORDS
+    try:
+        if db.query(SensitiveKeyword).first() is None:
+            for item in DEFAULT_SENSITIVE_KEYWORDS:
+                db.add(SensitiveKeyword(
+                    keyword=item["keyword"],
+                    category=item["category"],
+                    risk_weight=item["risk_weight"],
+                    is_active=True
+                ))
+            db.commit()
+            print("[+] Seeded default sensitive asset keywords.")
+    except Exception as e:
+        print(f"[!] Warning in ensure_sensitive_keywords: {e}")
+
 def init_db():
     print("Initializing SQLite database...")
     Base.metadata.create_all(bind=engine)
@@ -62,8 +93,10 @@ def init_db():
 
     db = SessionLocal()
     try:
-        # Idempotency: always ensure config, valid admin hash, and demo roles exist.
+        # Idempotency: always ensure config, role_type column, sensitive keywords, valid admin hash, and demo roles exist.
         ensure_system_config(db)
+        ensure_employee_role_column(db)
+        ensure_sensitive_keywords(db)
         ensure_admin(db)
         ensure_admin_hash(db)
         ensure_analyst(db)
@@ -98,6 +131,7 @@ def init_db():
             name="Rahul Sharma",
             email="rahul.sharma@threatvista.com",
             department="Engineering",
+            role_type="Developer",
             photo_url="/assets/avatars/rahul.jpg",
             risk_score=92,
             status="High Risk"
@@ -106,6 +140,7 @@ def init_db():
             name="Amit Verma",
             email="amit.verma@threatvista.com",
             department="Sales",
+            role_type="Finance",
             photo_url="/assets/avatars/amit.jpg",
             risk_score=63,
             status="Suspicious"
@@ -114,6 +149,7 @@ def init_db():
             name="Priya Patel",
             email="priya.patel@threatvista.com",
             department="Human Resources",
+            role_type="HR",
             photo_url="/assets/avatars/priya.jpg",
             risk_score=15,
             status="Normal"
