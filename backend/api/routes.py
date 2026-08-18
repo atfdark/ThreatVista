@@ -1,5 +1,6 @@
 import csv
 import io
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -168,7 +169,8 @@ class RegisterRequest(BaseModel):
     username: str       # email, e.g. john.doe@threatvista.com
     password: str
     name: str           # display name
-    department: Optional[str] = "General"
+    department: Optional[str] = None
+    role_type: Optional[str] = "General"
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -176,6 +178,8 @@ class TokenResponse(BaseModel):
     username: str
     role: str
     name: Optional[str] = None
+    role_type: Optional[str] = None
+    department: Optional[str] = None
 
 # Shared dependency: SOC staff only. Employee accounts authenticate but must
 # not read SOC-wide data (other employees, alerts, settings, reports).
@@ -443,12 +447,15 @@ async def login(
         },
     })
 
+    emp = db.query(models.Employee).filter(models.Employee.email == user.username).first()
     return {
         "access_token": token,
         "token_type": "bearer",
         "username": user.username,
         "role": user.role,
         "name": _employee_name_for(db, user.username),
+        "role_type": emp.role_type if emp else "General",
+        "department": emp.department if emp else "General",
     }
 
 
@@ -478,12 +485,17 @@ async def register(
     )
     db.add(user)
 
+    role_type = payload.role_type or "General"
+    dept = payload.department or (role_type if role_type != "General" else "General")
+
     # Add to the employee directory so the person is visible/monitorable in SOC.
-    if db.query(models.Employee).filter(models.Employee.email == username).first() is None:
+    emp = db.query(models.Employee).filter(models.Employee.email == username).first()
+    if emp is None:
         emp = models.Employee(
             name=payload.name,
             email=username,
-            department=payload.department or "General",
+            department=dept,
+            role_type=role_type,
             risk_score=0,
             status="Normal",
         )
@@ -496,11 +508,16 @@ async def register(
             avg_file_copies_per_day=0.0,
             avg_upload_mb_per_day=0.0,
         ))
+    else:
+        if payload.role_type:
+            emp.role_type = payload.role_type
+        if payload.department:
+            emp.department = payload.department
 
     db.commit()
     db.refresh(user)
     log_action(db, user, "register", "auth", resource_id=str(user.id),
-               details=f"Employee account created for '{username}'", ip=ip)
+               details=f"Employee account created for '{username}' with role '{role_type}'", ip=ip)
 
     token, jti, expires_at = create_access_token(user)
     create_session(db, user, jti, expires_at, ip=ip)
@@ -511,6 +528,7 @@ async def register(
         "data": {
             "username": user.username,
             "role": user.role,
+            "role_type": role_type,
             "ip": ip,
             "at": datetime.utcnow().isoformat(),
         },
@@ -522,6 +540,8 @@ async def register(
         "username": user.username,
         "role": user.role,
         "name": payload.name,
+        "role_type": role_type,
+        "department": dept,
     }
 
 @router.post("/auth/logout")
@@ -829,6 +849,73 @@ def get_employee_detail(
     ]
 
     return employee
+
+
+@router.delete("/employees/{employee_id}")
+async def delete_employee(
+    employee_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Admin endpoint to completely delete an employee, all associated telemetry/alerts/incidents, and release their email and name for demos."""
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    import traceback
+    try:
+        emp_name = emp.name
+        emp_email = emp.email
+
+        # 1. Delete associated Incidents, Events, Alerts, Risk Scores, Behavior Profiles, Commands, Tokens, Devices
+        db.query(models.Incident).filter(models.Incident.employee_id == employee_id).delete()
+        db.query(models.Event).filter(models.Event.employee_id == employee_id).delete()
+        db.query(models.Alert).filter(models.Alert.employee_id == employee_id).delete()
+        db.query(models.RiskScore).filter(models.RiskScore.employee_id == employee_id).delete()
+        db.query(models.BehaviorProfile).filter(models.BehaviorProfile.employee_id == employee_id).delete()
+        db.query(models.RemoteCommand).filter(models.RemoteCommand.employee_id == employee_id).delete()
+        db.query(models.AgentEnrollmentToken).filter(models.AgentEnrollmentToken.employee_id == employee_id).delete()
+        db.query(models.Device).filter(models.Device.employee_id == employee_id).delete()
+
+        # 3. Delete matching User login account and its active sessions so email and username can be reused cleanly
+        user_account = db.query(models.User).filter(
+            (models.User.username == emp_email) | (models.User.username == emp_name)
+        ).first()
+        if user_account:
+            db.query(models.Session).filter(models.Session.user_id == user_account.id).delete()
+            db.delete(user_account)
+
+        # 4. Delete the Employee record itself
+        db.delete(emp)
+        db.commit()
+
+        # 5. Audit log
+        log_action(
+            db, current_user, "employee.delete", "employee",
+            resource_id=str(employee_id),
+            details=f"Completely deleted employee '{emp_name}' ({emp_email}) and released email/credentials",
+            ip=client_ip(request),
+        )
+
+        # 6. WebSocket broadcast to all connected dashboards and directories
+        await manager.broadcast({
+            "type": "employee_deleted",
+            "data": {
+                "employee_id": employee_id,
+                "name": emp_name,
+                "email": emp_email
+            }
+        })
+
+        return {
+            "success": True,
+            "message": f"Employee {emp_name} ({emp_email}) and associated data removed successfully."
+        }
+    except Exception as e:
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete employee: {str(e)}")
 
 
 # Role Baselines & Employee Role Management
@@ -1187,8 +1274,13 @@ async def create_event(
             "id": created_event.id,
             "employee_id": created_event.employee_id,
             "event_type": created_event.event_type,
+            "filename": created_event.filename,
+            "extension": created_event.extension,
+            "folder": created_event.folder,
+            "size": created_event.size,
+            "usb_status": created_event.usb_status,
+            "details": created_event.details,
             "timestamp": created_event.timestamp.isoformat(),
-            "details": created_event.details
         }
     })
 

@@ -5,7 +5,7 @@ import Sidebar from '../components/Sidebar';
 import SecurityAlertPopup from '../components/SecurityAlertPopup';
 import { useWebSocket } from '../services/websocket';
 import { formatIST } from '../utils/time';
-import { playSecurityAlertSound, isSoundEnabled, setSoundEnabled, testAlertSound } from '../utils/sound';
+import { playSecurityAlertSound, startAlertBeepLoop, stopAlertBeepLoop, playAcknowledgeSound, isSoundEnabled, setSoundEnabled, testAlertSound } from '../utils/sound';
 
 export default function MainLayout() {
   const navigate = useNavigate();
@@ -30,6 +30,21 @@ export default function MainLayout() {
     }
   }, [navigate]);
 
+  // Continuous beeping until all active alerts are acknowledged/resolved
+  useEffect(() => {
+    const hasUnacknowledged = securityAlerts.some(
+      (a) => a.status !== 'Acknowledged' && a.status !== 'Resolved'
+    );
+    if (hasUnacknowledged && soundActive) {
+      startAlertBeepLoop();
+    } else {
+      stopAlertBeepLoop();
+    }
+    return () => {
+      stopAlertBeepLoop();
+    };
+  }, [securityAlerts, soundActive]);
+
   const handleToggleSound = () => {
     const next = !soundActive;
     setSoundEnabled(next);
@@ -50,6 +65,14 @@ export default function MainLayout() {
     );
   };
 
+  const handleAcknowledgeAll = () => {
+    setSecurityAlerts((prev) =>
+      prev.map((a) => ({ ...a, status: 'Acknowledged' }))
+    );
+    stopAlertBeepLoop();
+    playAcknowledgeSound();
+  };
+
   // Live WebSocket message handler with auto-reconnect
   const handleWsMessage = useCallback((msg) => {
     if (msg.type === 'new_login') {
@@ -63,8 +86,8 @@ export default function MainLayout() {
       window.setTimeout(() => setToast(null), 6000);
     } else if (msg.type === 'security_alert') {
       const alertData = msg.data || {};
-      // Play crisp security alarm sound chime
-      playSecurityAlertSound();
+      // Start continuous beep loop
+      startAlertBeepLoop();
       // Add to active alerts stack (deduping by alert_id or timestamp/device)
       setSecurityAlerts((prev) => {
         const filtered = prev.filter(
@@ -91,6 +114,7 @@ export default function MainLayout() {
         alerts={securityAlerts}
         onDismiss={handleDismissAlert}
         onStatusChange={handleAlertStatusChange}
+        onAcknowledgeAll={handleAcknowledgeAll}
         soundEnabled={soundActive}
         onToggleSound={handleToggleSound}
       />

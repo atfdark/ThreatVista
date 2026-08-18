@@ -4,6 +4,8 @@
  * Generates futuristic dual-tone attention chimes without any external mp3/asset
  * dependencies. Handles browser autoplay restrictions gracefully by lazily
  * instantiating and auto-resuming AudioContext on user gestures.
+ *
+ * Supports continuous repetitive beeping until an alert is Acknowledged by the SOC analyst.
  */
 
 let audioCtx = null;
@@ -16,6 +18,7 @@ function getSoundPreference() {
 }
 
 let soundEnabled = getSoundPreference();
+let beepIntervalId = null;
 
 function getAudioContext() {
   if (!audioCtx) {
@@ -86,7 +89,7 @@ export function playSecurityAlertSound() {
     osc2.frequency.exponentialRampToValueAtTime(1760, now + 0.35);
 
     gain2.gain.setValueAtTime(0.001, now + 0.15);
-    gain2.gain.linearRampToValueAtTime(0.4, now + 0.18);
+    gain2.gain.linearRampToTime(0.4, now + 0.18);
     gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
 
     osc2.connect(gain2);
@@ -97,9 +100,63 @@ export function playSecurityAlertSound() {
 
     return true;
   } catch (e) {
-    console.warn('[Sound] Could not play alert chime:', e);
-    return false;
+    // Fallback: simpler tone in case of older AudioContext
+    try {
+      const ctx = getAudioContext();
+      if (!ctx) return false;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(987.77, now); // B5
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.35);
+      return true;
+    } catch (err2) {
+      console.warn('[Sound] Audio playback failed:', err2);
+      return false;
+    }
   }
+}
+
+/**
+ * Start repeating alert beeps until stopped (loops every 1.6s).
+ */
+export function startAlertBeepLoop() {
+  if (beepIntervalId !== null) return; // Already beeping
+
+  // Play immediately on trigger
+  if (soundEnabled) {
+    playSecurityAlertSound();
+  }
+
+  // Schedule continuous alarm repeat every 1.6 seconds
+  beepIntervalId = setInterval(() => {
+    if (soundEnabled) {
+      playSecurityAlertSound();
+    }
+  }, 1600);
+}
+
+/**
+ * Stop the repeating alert beeps immediately when Ack / Resolve is clicked.
+ */
+export function stopAlertBeepLoop() {
+  if (beepIntervalId !== null) {
+    clearInterval(beepIntervalId);
+    beepIntervalId = null;
+  }
+}
+
+/**
+ * Check if the alert alarm is currently looping.
+ */
+export function isAlertBeeping() {
+  return beepIntervalId !== null;
 }
 
 /**
@@ -152,7 +209,9 @@ export function isSoundEnabled() {
 export function setSoundEnabled(enabled) {
   soundEnabled = Boolean(enabled);
   localStorage.setItem(SOUND_STORAGE_KEY, String(soundEnabled));
-  if (soundEnabled) {
+  if (!soundEnabled) {
+    stopAlertBeepLoop();
+  } else {
     // Play a gentle chirp to verify sound is active
     playAcknowledgeSound();
   }

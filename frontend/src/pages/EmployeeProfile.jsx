@@ -23,7 +23,13 @@ import {
   Sparkles,
   Layers,
   FileText,
-  UserCheck
+  UserCheck,
+  Folder,
+  Trash2,
+  PlusCircle,
+  Edit3,
+  Move,
+  Clock
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
@@ -66,12 +72,37 @@ export default function EmployeeProfile() {
   const [resetRiskErr, setResetRiskErr] = useState('');
   const [roleSaving, setRoleSaving] = useState(false);
   const [roleMsg, setRoleMsg] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState('');
 
   const userRole = (() => {
     try { return JSON.parse(localStorage.getItem('threatvista_user') || '{}').role || 'admin'; }
     catch { return 'admin'; }
   })();
   const isAdmin = userRole === 'admin';
+
+  const handleDeleteEmployee = async (empToDelete) => {
+    if (!empToDelete) return;
+    setDeleteBusy(true);
+    try {
+      await api.deleteEmployee(empToDelete.id);
+      setDeleteTarget(null);
+      setDeleteMsg(`✓ Employee "${empToDelete.name}" (${empToDelete.email}) permanently removed.`);
+      setTimeout(() => setDeleteMsg(''), 4500);
+      if (id && parseInt(id) === parseInt(empToDelete.id)) {
+        navigate('/employees');
+      } else {
+        setEmployees(prev => prev.filter(e => e.id !== empToDelete.id));
+        loadData(true);
+      }
+    } catch (err) {
+      console.error("Failed to delete employee", err);
+      alert("Failed to delete employee: " + (err?.response?.data?.detail || err.message));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const handleResetRisk = async () => {
     if (!id || !isAdmin) return;
@@ -162,42 +193,114 @@ export default function EmployeeProfile() {
   }, [loadData]);
 
   // Live WebSocket updates
-  const { lastMessage } = useWebSocket();
   const reloadDebounceRef = useRef(null);
 
-  useEffect(() => {
-    if (!lastMessage) return;
+  const handleWsMessage = useCallback((message) => {
+    if (!message) return;
 
-    if (id && lastMessage.type === 'risk_update' && lastMessage.data) {
-      const { employee_id, risk_score, status, reasons, recommendations, deviation, model_anomaly, model_score } = lastMessage.data;
-      if (employee_id === parseInt(id)) {
-        setEmployee(prev => prev ? { ...prev, risk_score, status } : prev);
-        setAiAnalysis(prev => ({
-          ...(prev || {}),
-          risk_score,
-          status,
-          reasons: reasons || prev?.reasons || [],
-          recommendations: recommendations || prev?.recommendations || [],
-          deviation: deviation || prev?.deviation || {},
-          model_anomaly: model_anomaly ?? prev?.model_anomaly ?? false,
-          model_score: model_score ?? prev?.model_score ?? 0,
-        }));
+    // 1. Single incoming live event
+    if (message.type === 'new_event' && message.data) {
+      const evt = message.data;
+      if (id && parseInt(evt.employee_id) === parseInt(id)) {
+        setEmployee(prev => {
+          if (!prev) return prev;
+          const existing = prev.events || [];
+          if (existing.some(e => e.id === evt.id)) return prev;
+          return { ...prev, events: [evt, ...existing] };
+        });
+      } else if (!id) {
+        if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = setTimeout(() => loadData(true), 800);
       }
     }
 
-    if (
-      lastMessage.type === 'batch_ingested' ||
-      lastMessage.type === 'incident_created' ||
-      lastMessage.type === 'incident_updated' ||
-      lastMessage.type === 'incident_resolved' ||
-      lastMessage.type === 'role_updated'
+    // 2. Batch events
+    if (message.type === 'batch_event' && message.data) {
+      const d = message.data;
+      const rawEvents = d.events || [];
+      if (id) {
+        const matching = rawEvents.filter(e => parseInt(e.employee_id) === parseInt(id));
+        if (matching.length > 0) {
+          setEmployee(prev => {
+            if (!prev) return prev;
+            const existing = prev.events || [];
+            const existingIds = new Set(existing.map(e => e.id));
+            const newItems = matching.filter(e => !existingIds.has(e.id));
+            if (!newItems.length) return prev;
+            return { ...prev, events: [...newItems, ...existing] };
+          });
+        }
+      } else {
+        if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = setTimeout(() => loadData(true), 800);
+      }
+    }
+
+    // 3. New employee registered or logged in
+    if (message.type === 'new_login') {
+      if (!id) {
+        // Refresh directory immediately so newly registered employee appears
+        if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = setTimeout(() => loadData(true), 400);
+      }
+    }
+
+    // 4. Live Risk Recalculations
+    if (message.type === 'risk_update' && message.data) {
+      if (id) {
+        const d = message.data;
+        const empData = d.employee_id ? (d.employee_id === parseInt(id) ? d : null) : (d[id] || d[String(id)]);
+        if (empData) {
+          const risk_score = empData.score ?? empData.risk_score;
+          const status = empData.status;
+          const reasons = empData.reasons;
+          const recommendations = empData.recommendations;
+          const deviation = empData.deviation;
+          const model_anomaly = empData.model_anomaly;
+          const model_score = empData.model_score;
+
+          setEmployee(prev => prev ? { ...prev, risk_score: risk_score ?? prev.risk_score, status: status ?? prev.status } : prev);
+          setAiAnalysis(prev => ({
+            ...(prev || {}),
+            risk_score: risk_score ?? prev?.risk_score ?? 0,
+            status: status ?? prev?.status ?? 'Safe',
+            reasons: reasons || prev?.reasons || [],
+            recommendations: recommendations || prev?.recommendations || [],
+            deviation: deviation || prev?.deviation || {},
+            model_anomaly: model_anomaly ?? prev?.model_anomaly ?? false,
+            model_score: model_score ?? prev?.model_score ?? 0,
+          }));
+        }
+      } else {
+        if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = setTimeout(() => loadData(true), 800);
+      }
+    }
+
+    // 5. Incident lifecycle, role updates & employee deletion
+    if (message.type === 'employee_deleted' && message.data) {
+      const delId = message.data.employee_id;
+      if (id && parseInt(id) === parseInt(delId)) {
+        navigate('/employees');
+      } else if (!id) {
+        setEmployees(prev => prev.filter(e => e.id !== delId));
+      }
+    } else if (
+      message.type === 'batch_ingested' ||
+      message.type === 'incident_created' ||
+      message.type === 'incident_updated' ||
+      message.type === 'incident_resolved' ||
+      message.type === 'role_updated' ||
+      message.type === 'device_connected'
     ) {
       if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
       reloadDebounceRef.current = setTimeout(() => {
         loadData(true);
       }, 500);
     }
-  }, [lastMessage, id, loadData]);
+  }, [id, loadData, navigate]);
+
+  useWebSocket(handleWsMessage);
 
   const getRecommendations = (score) => {
     if (score > 75) {
@@ -229,6 +332,57 @@ export default function EmployeeProfile() {
       case 'Manager': return 'text-indigo-400 bg-indigo-500/10 border-indigo-500/30';
       default: return 'text-cyber-muted bg-cyber-bg border-cyber-border';
     }
+  };
+
+  const getEventTypeBadge = (type = '') => {
+    const t = type.toLowerCase();
+    if (t.includes('delete')) {
+      return {
+        label: type.toUpperCase(),
+        icon: Trash2,
+        style: 'text-rose-400 bg-rose-500/15 border-rose-500/35 font-bold'
+      };
+    }
+    if (t.includes('create')) {
+      return {
+        label: type.toUpperCase(),
+        icon: PlusCircle,
+        style: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/35 font-bold'
+      };
+    }
+    if (t.includes('modify')) {
+      return {
+        label: type.toUpperCase(),
+        icon: Edit3,
+        style: 'text-amber-400 bg-amber-500/15 border-amber-500/35 font-bold'
+      };
+    }
+    if (t.includes('copy') || t.includes('move') || t.includes('rename')) {
+      return {
+        label: type.toUpperCase(),
+        icon: Move,
+        style: 'text-cyan-400 bg-cyan-500/15 border-cyan-500/35 font-bold'
+      };
+    }
+    if (t.includes('usb')) {
+      return {
+        label: type.toUpperCase(),
+        icon: HardDrive,
+        style: 'text-purple-400 bg-purple-500/15 border-purple-500/35 font-bold'
+      };
+    }
+    if (t.includes('network')) {
+      return {
+        label: type.toUpperCase(),
+        icon: Activity,
+        style: 'text-blue-400 bg-blue-500/15 border-blue-500/35 font-bold'
+      };
+    }
+    return {
+      label: type.toUpperCase(),
+      icon: FileText,
+      style: 'text-cyber-muted bg-cyber-bg border-cyber-border'
+    };
   };
 
   if (loading && !employee && employees.length === 0) {
@@ -352,19 +506,34 @@ export default function EmployeeProfile() {
               </div>
             </div>
             {isAdmin && (
-              <button
-                type="button"
-                onClick={handleResetRisk}
-                disabled={resetRiskBusy}
-                title="Force risk to 0% / Safe and resolve active incident (Manual Override)"
-                className="px-3 py-2 bg-cyber-danger/10 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg rounded border border-cyber-danger/30 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                {resetRiskBusy ? 'RESETTING…' : 'RESET RISK TO 0'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetRisk}
+                  disabled={resetRiskBusy}
+                  title="Force risk to 0% / Safe and resolve active incident (Manual Override)"
+                  className="px-3 py-2 bg-cyber-warning/10 hover:bg-cyber-warning text-cyber-warning hover:text-cyber-bg rounded border border-cyber-warning/30 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {resetRiskBusy ? 'RESETTING…' : 'RESET RISK TO 0'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(employee)}
+                  title="Permanently remove employee and clear all data/credentials for demo reuse"
+                  className="px-3 py-2 bg-cyber-danger/15 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg rounded border border-cyber-danger/40 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> REMOVE EMPLOYEE
+                </button>
+              </div>
             )}
           </div>
         </div>
 
+        {deleteMsg && (
+          <div className="p-3 bg-cyber-success/10 border border-cyber-success/30 rounded-lg text-xs text-cyber-success font-mono flex items-center gap-2 animate-fade-in">
+            <CheckCircle className="h-4 w-4" /> {deleteMsg}
+          </div>
+        )}
         {roleMsg && (
           <div className="p-3 bg-cyber-success/10 border border-cyber-success/30 rounded-lg text-xs text-cyber-success font-mono flex items-center gap-2 animate-fade-in">
             <CheckCircle className="h-4 w-4" /> {roleMsg}
@@ -733,24 +902,61 @@ export default function EmployeeProfile() {
             </div>
           </div>
 
-          <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-            {filteredEvents.map((evt, idx) => (
-              <div key={idx} className="p-3 bg-cyber-bg/60 border border-cyber-border/60 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono hover:border-cyber-primary/40 transition-colors">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-cyber-border/50 text-cyber-secondary shrink-0">
-                    {evt.event_type}
-                  </span>
-                  <span className="text-cyber-text truncate">
-                    {evt.filename || evt.details || evt.folder || 'Telemetry event'}
-                  </span>
+          <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+            {filteredEvents.map((evt, idx) => {
+              const badge = getEventTypeBadge(evt.event_type);
+              const BadgeIcon = badge.icon;
+              const isDelete = (evt.event_type || '').toLowerCase().includes('delete');
+              return (
+                <div 
+                  key={evt.id || idx} 
+                  className={`p-3 bg-cyber-bg/70 border rounded-lg flex flex-col gap-2 text-xs font-mono transition-all ${
+                    isDelete ? 'border-rose-500/30 hover:border-rose-500/60 bg-rose-950/10' : 'border-cyber-border/70 hover:border-cyber-primary/40'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase border flex items-center gap-1 shrink-0 ${badge.style}`}>
+                        <BadgeIcon className="h-3 w-3" />
+                        {badge.label}
+                      </span>
+                      <span className="text-cyber-text font-bold truncate text-xs">
+                        {evt.filename || evt.details || evt.folder || 'Telemetry event'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-cyber-muted shrink-0">
+                      {evt.size && (
+                        <span className="px-1.5 py-0.5 bg-cyber-card border border-cyber-border rounded text-[10px] text-cyber-text">
+                          {evt.size}
+                        </span>
+                      )}
+                      {evt.usb_status && (
+                        <span className="text-cyber-warning flex items-center gap-1 font-bold">
+                          <HardDrive className="h-3 w-3" /> {evt.usb_status}
+                        </span>
+                      )}
+                      <span className="text-cyber-muted/80 flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Prominent Location / Source Path Line */}
+                  {(evt.folder || evt.details) && (
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono text-cyber-muted bg-cyber-bg/60 px-2.5 py-1.5 rounded border border-cyber-border/50 break-all">
+                      <Folder className="h-3.5 w-3.5 text-cyber-primary shrink-0" />
+                      <span className="text-cyber-muted uppercase text-[9px] tracking-wider font-bold">
+                        {isDelete ? 'Deleted From Location:' : 'Path / Directory:'}
+                      </span>
+                      <span className="text-cyber-text font-medium selection:bg-cyber-primary/20">
+                        {evt.folder || evt.details}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 text-[10px] text-cyber-muted shrink-0">
-                  {evt.size && <span>{evt.size}</span>}
-                  {evt.usb_status && <span className="text-cyber-warning">{evt.usb_status}</span>}
-                  <span>{formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {filteredEvents.length === 0 && (
               <div className="py-8 text-center text-xs font-mono text-cyber-muted">
                 No activity records found matching this filter.
@@ -893,13 +1099,28 @@ export default function EmployeeProfile() {
                 </div>
               </div>
 
-              {/* Bottom Navigate button */}
-              <button 
-                onClick={() => navigate(`/employees/${emp.id}`)}
-                className="w-full mt-4 py-2 bg-cyber-border/40 hover:bg-cyber-primary text-cyber-text hover:text-cyber-bg hover:border-cyber-primary rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1 border border-cyber-border transition-all cursor-pointer"
-              >
-                ANALYZE BEHAVIOR DNA <ArrowRight className="h-3.5 w-3.5" />
-              </button>
+              {/* Bottom Navigate and Remove buttons */}
+              <div className="flex items-center gap-2 mt-4">
+                <button 
+                  onClick={() => navigate(`/employees/${emp.id}`)}
+                  className="flex-1 py-2 bg-cyber-border/40 hover:bg-cyber-primary text-cyber-text hover:text-cyber-bg hover:border-cyber-primary rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1 border border-cyber-border transition-all cursor-pointer"
+                >
+                  ANALYZE BEHAVIOR DNA <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(emp);
+                    }}
+                    className="p-2 bg-cyber-danger/10 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg border border-cyber-danger/30 rounded-lg text-xs font-mono transition-all cursor-pointer"
+                    title={`Permanently remove ${emp.name} & release credentials for demo reuse`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
@@ -911,6 +1132,49 @@ export default function EmployeeProfile() {
           </div>
         )}
       </div>
+
+      {/* Confirmation Modal for Employee Removal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-md glass-panel border border-cyber-danger/50 p-6 rounded-xl space-y-4 shadow-[0_0_30px_rgba(239,68,68,0.25)]">
+            <div className="flex items-center gap-3 text-cyber-danger">
+              <div className="p-2.5 rounded-lg bg-cyber-danger/10 border border-cyber-danger/30">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold tracking-tight text-cyber-text">Remove Monitored Employee</h3>
+                <p className="text-xs text-cyber-muted font-mono">Irreversible deletion & credential release</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-cyber-muted leading-relaxed font-mono">
+              Are you sure you want to permanently delete <span className="text-cyber-text font-bold">{deleteTarget.name}</span> (<span className="text-cyber-accent">{deleteTarget.email}</span>)?
+              <br /><br />
+              This will remove all associated telemetry events, alerts, incidents, risk history, and release the email and name so you can register and use it again for demos.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-cyber-border/40">
+              <button
+                type="button"
+                disabled={deleteBusy}
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-lg bg-cyber-card border border-cyber-border text-cyber-muted hover:text-cyber-text text-xs font-mono transition-colors cursor-pointer"
+              >
+                CANCEL
+              </button>
+              <button
+                type="button"
+                disabled={deleteBusy}
+                onClick={() => handleDeleteEmployee(deleteTarget)}
+                className="px-4 py-2 rounded-lg bg-cyber-danger text-cyber-bg hover:bg-cyber-danger/90 font-bold text-xs font-mono transition-all flex items-center gap-2 cursor-pointer shadow-sm"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {deleteBusy ? 'REMOVING…' : 'CONFIRM REMOVAL'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

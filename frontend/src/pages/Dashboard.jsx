@@ -127,6 +127,14 @@ export default function Dashboard() {
       if (d.alerts && d.alerts.length) {
         setAlerts(prev => [...d.alerts, ...prev].slice(0, 3));
       }
+    } else if (message.type === 'new_login' || message.type === 'role_updated' || message.type === 'employee_deleted') {
+      Promise.all([api.getStats(), api.getEmployees(), api.getIncidents()])
+        .then(([statsData, empsData, incidentsData]) => {
+          setStats(statsData);
+          setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
+          setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
+        })
+        .catch((err) => console.error('Failed to refresh dashboard on login/role/employee change', err));
     }
   });
 
@@ -213,7 +221,7 @@ export default function Dashboard() {
   const totalEmployees = stats?.total_employees || 0;
   const highRisk = stats?.high_risk || 0;
   const activeAlerts = stats?.active_alerts || 0;
-  const averageRisk = stats?.average_risk || 0;
+  const averageRisk = stats?.average_risk !== undefined ? Math.round(stats.average_risk) : 0;
   const onlineEmployees = stats?.online_employees ?? 0;
   const offlineEmployees = stats?.offline_employees ?? 0;
 
@@ -480,24 +488,51 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody className="divide-y divide-cyber-border/40 font-mono">
-              {[...recentEvents].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 10).map((evt) => (
-                <tr key={evt.id} className="hover:bg-cyber-border/10">
-                  <td className="py-2.5 pl-3">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${
-                      evt.event_type === 'usb_insert' ? 'text-cyber-primary border-cyber-primary/20 bg-cyber-primary/5' :
-                      evt.event_type === 'file_copy' ? 'text-cyber-accent border-cyber-accent/20 bg-cyber-accent/5' :
-                      evt.event_type === 'network_upload' ? 'text-cyber-secondary border-cyber-secondary/20 bg-cyber-secondary/5' :
-                      'text-cyber-muted border-cyber-border bg-cyber-bg/50'
-                    }`}>
-                      {evt.event_type.replace('_', ' ')}
-                    </span>
-                  </td>
-                  <td className="py-2.5 text-xs text-cyber-text">{evt.details || '-'}</td>
-                  <td className="py-2.5 text-right pr-3 text-cyber-muted text-[10px]">
-                    {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                </tr>
-              ))}
+              {[...recentEvents].sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || '')).slice(0, 10).map((evt) => {
+                const isDelete = (evt.event_type || '').toLowerCase().includes('delete');
+                const isCreate = (evt.event_type || '').toLowerCase().includes('create');
+                const isModify = (evt.event_type || '').toLowerCase().includes('modify');
+                const isCopy = (evt.event_type || '').toLowerCase().includes('copy') || (evt.event_type || '').toLowerCase().includes('move');
+                const isUsb = (evt.event_type || '').toLowerCase().includes('usb');
+                
+                const badgeCls = isDelete
+                  ? 'text-rose-400 border-rose-500/30 bg-rose-500/10 font-bold'
+                  : isCreate
+                  ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10 font-bold'
+                  : isModify
+                  ? 'text-amber-400 border-amber-500/30 bg-amber-500/10 font-bold'
+                  : isCopy
+                  ? 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10 font-bold'
+                  : isUsb
+                  ? 'text-purple-400 border-purple-500/30 bg-purple-500/10 font-bold'
+                  : 'text-cyber-muted border-cyber-border bg-cyber-bg/50';
+
+                return (
+                  <tr key={evt.id || Math.random()} className="hover:bg-cyber-border/10">
+                    <td className="py-2.5 pl-3 align-top">
+                      <span className={`text-[10px] px-2 py-0.5 rounded border uppercase inline-block whitespace-nowrap ${badgeCls}`}>
+                        {evt.event_type.replace('_', ' ')}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-xs text-cyber-text">
+                      <div className="font-medium text-cyber-text">
+                        {evt.filename || evt.details || '-'}
+                      </div>
+                      {(evt.folder || (evt.details && evt.details.includes(' in '))) && (
+                        <div className="text-[10.5px] text-cyber-muted font-mono mt-0.5 flex items-center gap-1 break-all">
+                          <span className="text-[9px] uppercase text-cyber-muted font-bold">
+                            {isDelete ? 'Location:' : 'Path:'}
+                          </span>
+                          <span className="text-cyber-text/80">{evt.folder || evt.details}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2.5 text-right pr-3 text-cyber-muted text-[10px] whitespace-nowrap align-top">
+                      {formatIST(evt.timestamp, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </td>
+                  </tr>
+                );
+              })}
               {recentEvents.length === 0 && (
                 <tr>
                   <td colSpan="3" className="text-center py-8 text-cyber-muted text-xs font-mono">

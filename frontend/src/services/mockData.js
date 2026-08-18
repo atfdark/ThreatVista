@@ -146,6 +146,11 @@ export const api = {
     }
   },
 
+  deleteEmployee: async (id) => {
+    const res = await http.delete(`/employees/${id}`);
+    return res.data;
+  },
+
   getAlerts: async () => {
     try {
       const res = await http.get(`/alerts`);
@@ -417,8 +422,14 @@ export const api = {
     }
   },
 
-  register: async (name, email, password) => {
-    const res = await http.post(`/auth/register`, { username: email, password, name });
+  register: async (name, email, password, roleType = 'Developer', department = null) => {
+    const res = await http.post(`/auth/register`, { 
+      username: email, 
+      password, 
+      name,
+      role_type: roleType,
+      department: department || roleType
+    });
     return res.data;
   }
 };

@@ -153,9 +153,14 @@ export default function MyProfile() {
             <span className="font-mono font-bold text-2xl text-cyber-primary">{initials}</span>
           </div>
           <h2 className="text-2xl font-bold text-cyber-text tracking-tight">{user.name || user.username || 'Employee'}</h2>
-          <span className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border uppercase font-medium text-cyber-success bg-cyber-success/10 border-cyber-success/25">
-            <BadgeCheck className="h-3.5 w-3.5" /> {roleLabel} · Signed In
-          </span>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border uppercase font-medium text-cyber-success bg-cyber-success/10 border-cyber-success/25">
+              <BadgeCheck className="h-3.5 w-3.5" /> Signed In
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border uppercase font-bold text-cyber-primary bg-cyber-primary/10 border-cyber-primary/30">
+              Role: {user.role_type || 'Developer'}
+            </span>
+          </div>
         </div>
 
         {/* Details */}
@@ -163,8 +168,8 @@ export default function MyProfile() {
           <div className="flex items-center gap-3 p-3 bg-cyber-bg/60 border border-cyber-border/60 rounded-lg">
             <Mail className="h-4 w-4 text-cyber-secondary shrink-0" />
             <div className="min-w-0">
-              <div className="text-[9px] font-mono uppercase text-cyber-muted tracking-wider">Email</div>
-              <div className="text-sm text-cyber-text truncate">{user.username}</div>
+              <div className="text-[9px] font-mono uppercase text-cyber-muted tracking-wider">Email & Department</div>
+              <div className="text-sm text-cyber-text truncate">{user.username} • {user.department || user.role_type || 'Engineering'}</div>
             </div>
           </div>
           <div className="flex items-center gap-3 p-3 bg-cyber-bg/60 border border-cyber-border/60 rounded-lg">

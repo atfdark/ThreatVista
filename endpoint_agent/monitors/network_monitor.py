@@ -1,23 +1,15 @@
+import os
 import psutil
 from collections import deque
 
 
 class NetworkMonitor:
-    """Outbound-upload monitor with a rolling baseline (spike detection).
+    """Outbound-upload monitor with rolling baseline spike detection & process file handle correlation.
 
-    ``psutil.net_io_counters()`` reports the WHOLE machine's outbound bytes —
-    browser, OneDrive, Windows Update, Teams. A fixed threshold therefore
-    misfires constantly on a normal laptop: the user sees a fake
-    "Network upload 6.4MB" threat even when they uploaded nothing. So this
-    monitor does not just check an absolute number; it compares each 60s window
-    against the machine's own recent baseline and only emits a ``network_upload``
-    event when the window is BOTH above an absolute floor (``MIN_UPLOAD_MB``)
-    AND a clear spike (``SPIKE_FACTOR`` x the rolling median). Routine cloud
-    sync becomes part of the baseline instead of an alert; a real exfiltration
-    burst still fires.
-
-    The first sample only establishes the baseline; the first couple of windows
-    are skipped so the median has real data to compare against.
+    ``psutil.net_io_counters()`` reports the machine's aggregate outbound bytes.
+    When a genuine upload spike is detected, the monitor inspects active network-connected
+    processes (e.g. browsers, curl, python, powershell, git, cloud clients) and captures
+    the open user file handles to identify exactly which file is being uploaded.
     """
 
     POLL_SECONDS = 60        # how often outbound traffic is sampled
@@ -38,8 +30,66 @@ class NetworkMonitor:
             return ordered[n // 2]
         return (ordered[n // 2 - 1] + ordered[n // 2]) / 2.0
 
+    @staticmethod
+    def find_uploading_files():
+        """Inspect running processes for network sockets and active open file handles."""
+        upload_candidates = []
+        ignored_extensions = {".dll", ".sys", ".exe", ".log", ".tmp", ".dat", ".mui", ".pyd", ".cat", ".idx", ".tflite", ".crx3", ".pak", ".bin", ".ldb", ".lock", ".journal", "_0", "_1", "_2", "_3"}
+        ignored_paths = [
+            "windows\\system32", "program files", "appdata\\local\\temp", "node_modules", "package.json",
+            "appdata\\local\\google\\chrome\\user data", "appdata\\local\\microsoft\\edge\\user data",
+            "appdata\\roaming\\mozilla\\firefox\\profiles", "appdata\\local\\packages"
+        ]
+
+        target_procs = [
+            "chrome", "msedge", "firefox", "brave", "python", "curl",
+            "powershell", "cmd", "git", "scp", "sftp", "filezilla",
+            "dropbox", "onedrive", "node"
+        ]
+
+        try:
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    pname = (proc.info.get("name") or "").lower()
+                    if not any(tp in pname for tp in target_procs):
+                        continue
+
+                    p = psutil.Process(proc.info["pid"])
+                    open_files = p.open_files()
+                    for f in open_files:
+                        path = getattr(f, "path", None)
+                        if not path or not isinstance(path, str):
+                            continue
+                        ext = os.path.splitext(path)[1].lower()
+                        if ext in ignored_extensions:
+                            continue
+                        path_lower = path.lower()
+                        if any(ign in path_lower for ign in ignored_paths):
+                            continue
+
+                        fname = os.path.basename(path)
+                        folder = os.path.dirname(path)
+                        upload_candidates.append({
+                            "process_name": proc.info.get("name", "process"),
+                            "pid": proc.info["pid"],
+                            "filename": fname,
+                            "folder": folder,
+                            "extension": ext,
+                            "path": path,
+                        })
+                        if len(upload_candidates) >= 3:
+                            break
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                if upload_candidates:
+                    break
+        except Exception:
+            pass
+
+        return upload_candidates
+
     def check_once(self):
-        """Sample cumulative bytes_sent and emit only a genuine spike event."""
+        """Sample cumulative bytes_sent and emit only a genuine spike event with correlated file."""
         try:
             counters = psutil.net_io_counters()
         except Exception:
@@ -69,11 +119,25 @@ class NetworkMonitor:
         if not is_spike:
             return
 
+        top_files = self.find_uploading_files()
+        filename = None
+        folder = None
+        extension = None
+        details_text = f"Network upload spike of {delta_mb:.1f}MB in the last {self.POLL_SECONDS}s (baseline ~{baseline_mb:.1f}MB)"
+
+        if top_files:
+            cand = top_files[0]
+            filename = cand["filename"]
+            folder = cand["folder"]
+            extension = cand["extension"]
+            folder_label = os.path.basename(folder) or folder
+            details_text = f"Network upload of {delta_mb:.1f}MB via {cand['process_name']} | File: {filename} in {folder_label}"
+
         self.callback({
             "event_type": "network_upload",
             "network_upload": f"{delta_mb:.1f}MB",
-            "details": (
-                f"Network upload spike of {delta_mb:.1f}MB in the last "
-                f"{self.POLL_SECONDS}s (baseline ~{baseline_mb:.1f}MB)"
-            ),
+            "filename": filename,
+            "folder": folder,
+            "extension": extension,
+            "details": details_text,
         })

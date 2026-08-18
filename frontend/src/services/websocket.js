@@ -23,13 +23,13 @@ const WS_URL = resolveWsUrl();
  * Connects to the ThreatVista WebSocket once and stays connected for the
  * lifetime of the component.
  *
- * The message handler is kept in a ref so a new inline-arrow callback on every
- * render does NOT tear down and reopen the socket (which previously leaked a
- * flood of connections to the backend).
+ * Supports BOTH callback pattern `useWebSocket((msg) => ...)` and destructured
+ * hook pattern `const { lastMessage, isConnected } = useWebSocket()`.
  */
 export function useWebSocket(onMessage, onReconnect = null) {
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connected' | 'reconnecting' | 'disconnected'
+  const [lastMessage, setLastMessage] = useState(null);
   const wsRef = useRef(null);
   const onMessageRef = useRef(onMessage);
   const onReconnectRef = useRef(onReconnect);
@@ -73,6 +73,7 @@ export function useWebSocket(onMessage, onReconnect = null) {
         socket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            setLastMessage(data);
             if (onMessageRef.current) onMessageRef.current(data);
           } catch (e) {
             console.error('[WS] Failed to parse message', e);
@@ -133,6 +134,5 @@ export function useWebSocket(onMessage, onReconnect = null) {
     };
   }, []); // connect on mount and auto-manage lifecycle
 
-  return { isConnected, connectionStatus, ws: wsRef.current };
+  return { isConnected, connectionStatus, lastMessage, ws: wsRef.current };
 }
-

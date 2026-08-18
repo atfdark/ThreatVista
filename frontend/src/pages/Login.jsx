@@ -1,15 +1,76 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  ShieldCheck, Lock, User, Mail, UserPlus, LogIn, AlertCircle
+  ShieldCheck, Lock, User, Mail, UserPlus, LogIn, AlertCircle, Briefcase, Sparkles, CheckCircle2
 } from 'lucide-react';
 import { api } from '../services/mockData';
+
+const ROLE_DESCRIPTIONS = {
+  Developer: {
+    dept: 'Engineering',
+    desc: 'High file ops & source code repository modifications are normal.',
+    badge: 'text-cyber-primary bg-cyber-primary/10 border-cyber-primary/30',
+    allowed: 'Code files (.py, .js, .cpp, .json) & build outputs normal'
+  },
+  HR: {
+    dept: 'Human Resources',
+    desc: 'PDFs & payroll spreadsheets are normal. Source code & mass file creation will be flagged.',
+    badge: 'text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/30',
+    allowed: 'PDFs & employee sheets common; Code & mass file creation flagged'
+  },
+  Finance: {
+    dept: 'Finance',
+    desc: 'Excel & CSV financial records normal. Staging ZIP archives & source code are flagged.',
+    badge: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+    allowed: 'Excel, CSV & budget sheets common; ZIP archives & source code flagged'
+  },
+  Sales: {
+    dept: 'Sales',
+    desc: 'Client proposals & contracts normal. Source code file operations will be flagged.',
+    badge: 'text-blue-400 bg-blue-500/10 border-blue-500/30',
+    allowed: 'Client docs & decks normal; Code repositories flagged'
+  },
+  'Security Analyst': {
+    dept: 'Security',
+    desc: 'Diagnostics & elevated process execution activity are normal.',
+    badge: 'text-cyber-secondary bg-cyber-secondary/10 border-cyber-secondary/30',
+    allowed: 'Diagnostics & elevated process executions permitted'
+  },
+  'IT Support': {
+    dept: 'IT Support',
+    desc: 'System maintenance utilities & workstation scripts are normal.',
+    badge: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+    allowed: 'System tools & workstation setup scripts permitted'
+  },
+  Manager: {
+    dept: 'Management',
+    desc: 'Cross-functional review & strategic documentation are normal.',
+    badge: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/30',
+    allowed: 'Management reviews & office documents common'
+  },
+  Administrator: {
+    dept: 'Executive Admin',
+    desc: 'Administrative workstation tasks & enterprise configuration.',
+    badge: 'text-cyber-danger bg-cyber-danger/10 border-cyber-danger/30',
+    allowed: 'Enterprise administrative privileges'
+  },
+  General: {
+    dept: 'General Operations',
+    desc: 'Standard corporate workstation baseline behavior.',
+    badge: 'text-cyber-muted bg-cyber-bg border-cyber-border',
+    allowed: 'Standard office document handling'
+  }
+};
+
+const SUPPORTED_ROLES = Object.keys(ROLE_DESCRIPTIONS);
 
 function storeSession(data, fallbackName) {
   localStorage.setItem('threatvista_token', data.access_token);
   localStorage.setItem('threatvista_user', JSON.stringify({
     username: data.username,
     role: data.role || 'employee',
+    role_type: data.role_type || 'Developer',
+    department: data.department || 'General',
     name: data.name || fallbackName || data.username
   }));
 }
@@ -26,6 +87,7 @@ export default function Login() {
   // Employee form
   const [empName, setEmpName] = useState('');
   const [empEmail, setEmpEmail] = useState('');
+  const [empRole, setEmpRole] = useState('Developer');
   const [empPassword, setEmpPassword] = useState('');
   const [empConfirm, setEmpConfirm] = useState('');
 
@@ -75,7 +137,8 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      const data = await api.register(empName, empEmail, empPassword);
+      const dept = ROLE_DESCRIPTIONS[empRole]?.dept || 'General';
+      const data = await api.register(empName, empEmail, empPassword, empRole, dept);
       storeSession(data, empName);
       navigate('/me');
     } catch (err) {
@@ -87,6 +150,8 @@ export default function Login() {
 
   const inputCls =
     "w-full pl-10 pr-4 py-3 bg-cyber-bg/80 border border-cyber-border/80 rounded-lg text-sm text-cyber-text placeholder-cyber-muted focus:outline-none focus:border-cyber-primary focus:shadow-cyber transition-all";
+
+  const selectedRoleMeta = ROLE_DESCRIPTIONS[empRole] || ROLE_DESCRIPTIONS.General;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-cyber-bg cyber-grid relative scanline-overlay py-8">
@@ -111,22 +176,20 @@ export default function Login() {
           <button
             type="button"
             onClick={() => setAccountType('soc')}
-            className={`py-2 rounded-md text-xs font-mono uppercase tracking-wider transition-all ${
-              accountType === 'soc'
-                ? 'bg-gradient-to-r from-cyber-primary to-cyber-secondary text-cyber-bg font-bold shadow-cyber'
-                : 'text-cyber-muted hover:text-cyber-text'
-            }`}
+            className={`py-2 rounded-md text-xs font-mono uppercase tracking-wider transition-all cursor-pointer ${accountType === 'soc'
+              ? 'bg-gradient-to-r from-cyber-primary to-cyber-secondary text-cyber-bg font-bold shadow-cyber'
+              : 'text-cyber-muted hover:text-cyber-text'
+              }`}
           >
             SOC / Admin
           </button>
           <button
             type="button"
             onClick={() => setAccountType('employee')}
-            className={`py-2 rounded-md text-xs font-mono uppercase tracking-wider transition-all ${
-              accountType === 'employee'
-                ? 'bg-gradient-to-r from-cyber-primary to-cyber-secondary text-cyber-bg font-bold shadow-cyber'
-                : 'text-cyber-muted hover:text-cyber-text'
-            }`}
+            className={`py-2 rounded-md text-xs font-mono uppercase tracking-wider transition-all cursor-pointer ${accountType === 'employee'
+              ? 'bg-gradient-to-r from-cyber-primary to-cyber-secondary text-cyber-bg font-bold shadow-cyber'
+              : 'text-cyber-muted hover:text-cyber-text'
+              }`}
           >
             Employee
           </button>
@@ -180,7 +243,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50"
+              className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50 cursor-pointer"
             >
               {loading ? 'AUTHENTICATING...' : 'ACCESS CONTROL CENTER'}
             </button>
@@ -200,11 +263,10 @@ export default function Login() {
                   key={m.key}
                   type="button"
                   onClick={() => { setEmployeeMode(m.key); setError(''); }}
-                  className={`pb-2 text-xs font-mono uppercase tracking-wider transition-colors border-b-2 ${
-                    employeeMode === m.key
-                      ? 'text-cyber-primary border-cyber-primary'
-                      : 'text-cyber-muted border-transparent hover:text-cyber-text'
-                  }`}
+                  className={`pb-2 text-xs font-mono uppercase tracking-wider transition-colors border-b-2 cursor-pointer ${employeeMode === m.key
+                    ? 'text-cyber-primary border-cyber-primary'
+                    : 'text-cyber-muted border-transparent hover:text-cyber-text'
+                    }`}
                 >
                   {m.label}
                 </button>
@@ -214,7 +276,7 @@ export default function Login() {
             {employeeMode === 'signin' ? (
               <form onSubmit={handleEmployeeLogin} className="space-y-5">
                 <div>
-                  <label className="block text-xs font-mono uppercase text-cyber-muted mb-2 tracking-wider">Email</label>
+                  <label className="block text-xs font-mono uppercase text-cyber-muted mb-2 tracking-wider">Work Email</label>
                   <div className="relative">
                     <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-cyber-muted">
                       <Mail className="h-4 w-4" />
@@ -223,7 +285,7 @@ export default function Login() {
                       type="email"
                       value={empEmail}
                       onChange={(e) => setEmpEmail(e.target.value)}
-                      placeholder="you@threatvista.com"
+                      placeholder="you@company.com"
                       required
                       className={inputCls}
                     />
@@ -250,7 +312,7 @@ export default function Login() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <LogIn className="h-4 w-4" />
                   {loading ? 'SIGNING IN...' : 'SIGN IN'}
@@ -268,7 +330,7 @@ export default function Login() {
                       type="text"
                       value={empName}
                       onChange={(e) => setEmpName(e.target.value)}
-                      placeholder="Your name"
+                      placeholder="e.g. Alok Kumar"
                       required
                       className={inputCls}
                     />
@@ -289,6 +351,45 @@ export default function Login() {
                       required
                       className={inputCls}
                     />
+                  </div>
+                </div>
+
+                {/* Role-Based Selection */}
+                <div>
+                  <label className="block text-xs font-mono uppercase text-cyber-muted mb-2 tracking-wider flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Briefcase className="h-3.5 w-3.5 text-cyber-primary" /> Employee Role
+                    </span>
+                    <span className="text-[10px] text-cyber-primary font-bold">{empRole}</span>
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={empRole}
+                      onChange={(e) => setEmpRole(e.target.value)}
+                      className="w-full px-4 py-3 bg-cyber-bg/90 border border-cyber-border rounded-lg text-xs font-mono font-bold text-cyber-text focus:outline-none focus:border-cyber-primary focus:shadow-cyber transition-all appearance-none cursor-pointer"
+                    >
+                      {SUPPORTED_ROLES.map(role => (
+                        <option key={role} value={role} className="bg-cyber-card text-cyber-text">
+                          {role} — {ROLE_DESCRIPTIONS[role]?.dept}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Role Baseline Intel Hint */}
+                  <div className="mt-2 p-2.5 bg-cyber-bg/60 border border-cyber-border/80 rounded-lg text-[11px] font-mono space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-cyber-muted uppercase">ROLE BASELINE PROFILE:</span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded border uppercase font-bold ${selectedRoleMeta.badge}`}>
+                        {empRole}
+                      </span>
+                    </div>
+                    <p className="text-cyber-text text-[10.5px] leading-tight">
+                      {selectedRoleMeta.desc}
+                    </p>
+                    <p className="text-cyber-muted text-[10px]">
+                      › {selectedRoleMeta.allowed}
+                    </p>
                   </div>
                 </div>
 
@@ -329,14 +430,14 @@ export default function Login() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full py-3 bg-gradient-to-r from-cyber-primary to-cyber-secondary hover:from-cyber-primary/90 hover:to-cyber-secondary/90 text-cyber-bg font-bold rounded-lg text-sm transition-all focus:outline-none shadow-cyber-glow hover:shadow-cyber hover:scale-[1.01] active:scale-100 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <UserPlus className="h-4 w-4" />
                   {loading ? 'CREATING ACCOUNT...' : 'CREATE ACCOUNT & SIGN IN'}
                 </button>
 
                 <p className="text-[10px] text-cyber-muted font-mono text-center">
-                  Your account is stored in the ThreatVista database. Activity on this device is monitored.
+                  Account is stored with assigned role in ThreatVista. Activity will be monitored against {empRole} behavior baseline.
                 </p>
               </form>
             )}

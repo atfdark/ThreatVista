@@ -29,6 +29,7 @@ export default function SecurityAlertPopup({
   alerts = [],
   onDismiss,
   onStatusChange,
+  onAcknowledgeAll,
   soundEnabled = true,
   onToggleSound,
 }) {
@@ -175,11 +176,22 @@ export default function SecurityAlertPopup({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Quick Acknowledge All */}
+            {hasMultiple && canAct && onAcknowledgeAll && (
+              <button
+                onClick={onAcknowledgeAll}
+                className="px-2 py-0.5 bg-cyber-primary/20 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg border border-cyber-primary/40 rounded text-[9.5px] font-mono font-bold tracking-wider transition-all cursor-pointer"
+                title="Acknowledge all alerts and stop beeping"
+              >
+                ACK ALL
+              </button>
+            )}
+
             {/* Audio Toggle button */}
             <button
               onClick={onToggleSound}
-              className="p-1 rounded hover:bg-cyber-card text-cyber-muted hover:text-cyber-text transition-colors"
-              title={soundEnabled ? 'Alert Sound Enabled' : 'Alert Sound Muted'}
+              className="p-1 rounded hover:bg-cyber-card text-cyber-muted hover:text-cyber-text transition-colors cursor-pointer"
+              title={soundEnabled ? 'Alert Sound Enabled (Continuous Beep)' : 'Alert Sound Muted'}
             >
               {soundEnabled ? (
                 <Volume2 className="h-4 w-4 text-cyber-primary" />
@@ -191,7 +203,7 @@ export default function SecurityAlertPopup({
             {/* Dismiss button */}
             <button
               onClick={() => onDismiss && onDismiss(currentAlert)}
-              className="p-1 rounded hover:bg-cyber-danger/20 text-cyber-muted hover:text-cyber-danger transition-colors"
+              className="p-1 rounded hover:bg-cyber-danger/20 text-cyber-muted hover:text-cyber-danger transition-colors cursor-pointer"
               title="Dismiss Alert Pop-Up"
             >
               <X className="h-4 w-4" />
@@ -329,9 +341,10 @@ export default function SecurityAlertPopup({
               <button
                 disabled={isBusy}
                 onClick={handleAcknowledge}
-                className="flex-1 min-w-[110px] px-3 py-2 bg-cyber-primary/15 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg border border-cyber-primary/40 rounded-lg text-xs font-mono font-bold tracking-wider transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                className="flex-1 min-w-[110px] px-3 py-2 bg-cyber-primary/20 hover:bg-cyber-primary text-cyber-primary hover:text-cyber-bg border border-cyber-primary/50 rounded-lg text-xs font-mono font-bold tracking-wider transition-all flex items-center justify-center gap-1.5 shadow-cyber cursor-pointer active:scale-95"
+                title="Acknowledge alert and stop alarm beep"
               >
-                <Check className="h-3.5 w-3.5" /> ACKNOWLEDGE
+                <Check className="h-3.5 w-3.5" /> ACKNOWLEDGE (STOP BEEP)
               </button>
             )}
 
