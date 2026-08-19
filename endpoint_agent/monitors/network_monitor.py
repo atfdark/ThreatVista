@@ -40,25 +40,35 @@ class NetworkMonitor:
         """
         upload_candidates = []
 
-        # Extensions that are definitely NOT user uploads — OS/browser internals
+        # Extensions that are definitely NOT user uploads — OS/browser internals and fonts
         ignored_extensions = {
             ".dll", ".sys", ".exe", ".log", ".tmp", ".dat", ".mui", ".pyd",
             ".cat", ".idx", ".tflite", ".crx3", ".pak", ".bin", ".ldb",
             ".lock", ".journal", ".etl", ".ttf", ".otf", ".woff", ".woff2",
+            ".ttc", ".fon", ".eot", ".pfb", ".pfm",
             ".nls", ".manifest", ".config", ".pf", ".regtrans-ms",
+            ".blg", ".evtx", ".diagsession", ".clb", ".parc", ".shader",
+            ".aodl", ".otc", ".db-wal", ".db-shm", ".asar", ".node",
             "_0", "_1", "_2", "_3",
         }
 
         # Paths that indicate OS/browser internals — never user-uploaded files
+        system_root = (os.environ.get("SystemRoot") or "C:\\Windows").lower()
         ignored_paths = [
-            "windows\\system32", "windows\\fonts", "windows\\winsxs",
-            "windows\\servicing", "windows\\assembly",
-            "program files", "program files (x86)",
-            "appdata\\local\\temp", "node_modules", "package.json",
+            "\\windows\\", "windows\\", "system32", "syswow64", "fonts", "winsxs",
+            "servicing", "assembly", "microsoft.net",
+            "program files", "program files (x86)", "programdata",
+            "appdata\\local\\temp", "appdata\\locallow", "dxcache", "shadercache",
+            "node_modules", "package.json", "onedrivetemp",
             "appdata\\local\\google\\chrome\\user data",
             "appdata\\local\\microsoft\\edge\\user data",
+            "appdata\\local\\microsoft\\onedrive",
             "appdata\\roaming\\mozilla\\firefox\\profiles",
+            "appdata\\roaming\\discord", "appdata\\roaming\\slack", "appdata\\roaming\\teams",
             "appdata\\local\\packages", "appdata\\local\\microsoft\\windows",
+            "\\cache\\", "\\cache_data\\", "\\gpucache\\", "\\code cache\\",
+            "\\blob_storage\\", "\\shared dictionary\\", "\\session storage\\",
+            "\\logs\\",
             ".git\\", "__pycache__", ".venv", "site-packages",
         ]
 
@@ -99,15 +109,18 @@ class NetworkMonitor:
                         path = getattr(f, "path", None)
                         if not path or not isinstance(path, str):
                             continue
-                        ext = os.path.splitext(path)[1].lower()
+                        norm_path = os.path.normpath(path)
+                        ext = os.path.splitext(norm_path)[1].lower()
                         if ext in ignored_extensions:
                             continue
-                        path_lower = path.lower()
-                        if any(ign in path_lower for ign in ignored_paths):
+                        path_lower = norm_path.lower()
+                        if path_lower.startswith(system_root) or any(ign in path_lower for ign in ignored_paths):
                             continue
 
-                        fname = os.path.basename(path)
-                        folder = os.path.dirname(path)
+                        fname = os.path.basename(norm_path)
+                        if fname.startswith(".") or fname.lower() in ("lockfile", "lock", "index", "db", "cookies", "history", "preferences", "web data", "transportsecurity"):
+                            continue
+                        folder = os.path.dirname(norm_path)
 
                         # Try to get file size
                         file_size_str = None

@@ -107,6 +107,9 @@ def persist_behavior_profile(db: Session, employee_id: int, baseline: dict) -> N
     """Upsert the employee's Behavior DNA row from a freshly computed baseline."""
     if not baseline:
         return
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if emp is None:
+        return
     profile = (
         db.query(models.BehaviorProfile)
         .filter(models.BehaviorProfile.employee_id == employee_id)
@@ -125,6 +128,9 @@ def persist_behavior_profile(db: Session, employee_id: int, baseline: dict) -> N
 
 def persist_risk_history(db: Session, employee_id: int, score: int) -> None:
     """Append a risk_scores point when the score changes or enough time elapsed."""
+    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if emp is None:
+        return
     now = datetime.utcnow()
     last = (
         db.query(models.RiskScore)
@@ -160,8 +166,10 @@ def persist_risk_and_correlations(db: Session, employee_id: int, result: dict) -
     active = incident_service.get_active_incident(db, employee_id)
     stale = incident_service._stale_history_only(db, employee_id)
     emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if not emp:
+        return
     allow_score_write = active is not None or not stale
-    if emp and allow_score_write:
+    if allow_score_write:
         if active is not None:
             # Keep the employee row aligned with the monotonic incident score.
             emp.risk_score = active.risk_score
@@ -309,6 +317,9 @@ def run_ai_background(emp_ids: set, serialized_events: list, batch_alerts_data: 
 
             for employee_id in emp_ids:
                 try:
+                    emp = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+                    if not emp:
+                        continue
                     result = run_ai_for_employee(db, employee_id)
                     persist_risk_and_correlations(db, employee_id, result)
                     explanation = result.get("explanation", {})

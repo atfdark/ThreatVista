@@ -103,7 +103,9 @@ def get_or_create_behavior_profile(db: Session, employee_id: int) -> UserBehavio
         return profile
 
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
-    role = emp.role_type if emp else "General"
+    if not emp:
+        return None
+    role = emp.role_type if emp and emp.role_type else "General"
     template = ROLE_BASELINES.get(role, ROLE_BASELINES["General"])
 
     profile = UserBehaviorProfile(

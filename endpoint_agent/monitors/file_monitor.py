@@ -20,7 +20,7 @@ EXCLUDED_PATHS = [
 def is_path_excluded(path):
     if not path:
         return True
-    path_lower = path.lower()
+    path_lower = os.path.normpath(path).lower()
     path_with_slash = path_lower if path_lower.endswith('\\') else path_lower + '\\'
     for excluded in EXCLUDED_PATHS:
         if excluded in path_with_slash:

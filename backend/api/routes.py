@@ -504,13 +504,20 @@ async def register(
         )
         db.add(emp)
         db.flush()  # get emp.id before creating the DNA row
-        db.add(models.BehaviorProfile(
-            employee_id=emp.id,
-            working_hours_baseline="09:00 - 17:00",
-            avg_usb_inserts_per_day=0.0,
-            avg_file_copies_per_day=0.0,
-            avg_upload_mb_per_day=0.0,
-        ))
+        profile = db.query(models.BehaviorProfile).filter(models.BehaviorProfile.employee_id == emp.id).first()
+        if profile is None:
+            db.add(models.BehaviorProfile(
+                employee_id=emp.id,
+                working_hours_baseline="09:00 - 17:00",
+                avg_usb_inserts_per_day=0.0,
+                avg_file_copies_per_day=0.0,
+                avg_upload_mb_per_day=0.0,
+            ))
+        else:
+            profile.working_hours_baseline = "09:00 - 17:00"
+            profile.avg_usb_inserts_per_day = 0.0
+            profile.avg_file_copies_per_day = 0.0
+            profile.avg_upload_mb_per_day = 0.0
     else:
         if payload.role_type:
             emp.role_type = payload.role_type
