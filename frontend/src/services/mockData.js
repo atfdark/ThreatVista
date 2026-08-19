@@ -431,5 +431,73 @@ export const api = {
       department: department || roleType
     });
     return res.data;
+  },
+
+  // --- JIT Action Approvals (Pre-Action Authorization) ---
+  getActionRequests: async (status = null) => {
+    try {
+      const params = {};
+      if (status) params.status = status;
+      const res = await http.get('/action-requests', { params });
+      return res.data;
+    } catch {
+      return [];
+    }
+  },
+
+  getPendingActionRequestsCount: async () => {
+    try {
+      const res = await http.get('/action-requests/pending-count');
+      return res.data?.pending_count || 0;
+    } catch {
+      return 0;
+    }
+  },
+
+  approveActionRequest: async (requestId, notes = '') => {
+    const res = await http.post(`/action-requests/${requestId}/approve`, { notes });
+    return res.data;
+  },
+
+  rejectActionRequest: async (requestId, reason = '') => {
+    const res = await http.post(`/action-requests/${requestId}/reject`, { reason });
+    return res.data;
+  },
+
+  // --- Priority 2: User Behavior Analytics & Digital Twin ---
+  getUserBehaviorProfile: async (employeeId) => {
+    try {
+      const res = await http.get(`/users/${employeeId}/behavior-profile`);
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  getUserDigitalTwin: async (employeeId) => {
+    try {
+      const res = await http.get(`/users/${employeeId}/digital-twin`);
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  getUserAnomalyHistory: async (employeeId, limit = 20) => {
+    try {
+      const res = await http.get(`/users/${employeeId}/anomaly-history`, { params: { limit } });
+      return res.data || [];
+    } catch {
+      return [];
+    }
+  },
+
+  getUserRiskHistory: async (employeeId) => {
+    try {
+      const res = await http.get(`/users/${employeeId}/risk-history`);
+      return res.data || [];
+    } catch {
+      return [];
+    }
   }
 };

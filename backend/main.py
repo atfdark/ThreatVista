@@ -32,6 +32,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    manager.set_loop(asyncio.get_running_loop())
+
 @app.get("/")
 def read_root():
     return {"message": "ThreatVista Backend Running"}
@@ -55,12 +59,15 @@ Base.metadata.create_all(bind=engine)
 try:
     from backend.database.db_setup import ensure_employee_role_column, ensure_sensitive_keywords
     from backend.database.connection import SessionLocal
+    from backend.services.request_expiry_service import start_expiry_daemon
     _db = SessionLocal()
     try:
         ensure_employee_role_column(_db)
         ensure_sensitive_keywords(_db)
     finally:
         _db.close()
+    # Start automatic 5-minute action request expiry scheduler
+    start_expiry_daemon(interval_seconds=30)
 except Exception as _e:
     pass
 

@@ -10,11 +10,12 @@ class NetworkMonitor:
     When a genuine upload spike is detected, the monitor inspects active network-connected
     processes (e.g. browsers, curl, python, powershell, git, cloud clients) and captures
     the open user file handles to identify exactly which file is being uploaded.
+    It also captures the remote destination IP/hostname the process is connected to.
     """
 
-    POLL_SECONDS = 60        # how often outbound traffic is sampled
-    MIN_UPLOAD_MB = 50.0     # absolute floor: never alarm below this per window
-    SPIKE_FACTOR = 3.0       # require the window to be this many x the baseline
+    POLL_SECONDS = 30        # how often outbound traffic is sampled
+    MIN_UPLOAD_MB = 2.0      # absolute floor: never alarm below this per window
+    SPIKE_FACTOR = 2.0       # require the window to be this many x the baseline
     BASELINE_WINDOWS = 5     # how many past windows define "normal"
 
     def __init__(self, callback):
@@ -32,19 +33,43 @@ class NetworkMonitor:
 
     @staticmethod
     def find_uploading_files():
-        """Inspect running processes for network sockets and active open file handles."""
+        """Inspect running processes for network sockets and active open file handles.
+        
+        Returns list of candidates with file info, process name, PID, and destination IP.
+        Filters out system/browser internal files to show only real user documents.
+        """
         upload_candidates = []
-        ignored_extensions = {".dll", ".sys", ".exe", ".log", ".tmp", ".dat", ".mui", ".pyd", ".cat", ".idx", ".tflite", ".crx3", ".pak", ".bin", ".ldb", ".lock", ".journal", "_0", "_1", "_2", "_3"}
+
+        # Extensions that are definitely NOT user uploads — OS/browser internals
+        ignored_extensions = {
+            ".dll", ".sys", ".exe", ".log", ".tmp", ".dat", ".mui", ".pyd",
+            ".cat", ".idx", ".tflite", ".crx3", ".pak", ".bin", ".ldb",
+            ".lock", ".journal", ".etl", ".ttf", ".otf", ".woff", ".woff2",
+            ".nls", ".manifest", ".config", ".pf", ".regtrans-ms",
+            "_0", "_1", "_2", "_3",
+        }
+
+        # Paths that indicate OS/browser internals — never user-uploaded files
         ignored_paths = [
-            "windows\\system32", "program files", "appdata\\local\\temp", "node_modules", "package.json",
-            "appdata\\local\\google\\chrome\\user data", "appdata\\local\\microsoft\\edge\\user data",
-            "appdata\\roaming\\mozilla\\firefox\\profiles", "appdata\\local\\packages"
+            "windows\\system32", "windows\\fonts", "windows\\winsxs",
+            "windows\\servicing", "windows\\assembly",
+            "program files", "program files (x86)",
+            "appdata\\local\\temp", "node_modules", "package.json",
+            "appdata\\local\\google\\chrome\\user data",
+            "appdata\\local\\microsoft\\edge\\user data",
+            "appdata\\roaming\\mozilla\\firefox\\profiles",
+            "appdata\\local\\packages", "appdata\\local\\microsoft\\windows",
+            ".git\\", "__pycache__", ".venv", "site-packages",
         ]
 
+        # Processes that can perform network uploads
         target_procs = [
-            "chrome", "msedge", "firefox", "brave", "python", "curl",
+            "chrome", "msedge", "firefox", "brave", "opera",
+            "python", "curl", "wget",
             "powershell", "cmd", "git", "scp", "sftp", "filezilla",
-            "dropbox", "onedrive", "node"
+            "dropbox", "onedrive", "googledrive", "icloud",
+            "node", "slack", "teams", "telegram", "discord",
+            "postman", "insomnia",
         ]
 
         try:
@@ -55,6 +80,20 @@ class NetworkMonitor:
                         continue
 
                     p = psutil.Process(proc.info["pid"])
+
+                    # Get destination IPs this process is connected to
+                    dest_ips = set()
+                    try:
+                        conns = p.net_connections(kind='inet')
+                        for conn in conns:
+                            if conn.status == 'ESTABLISHED' and conn.raddr:
+                                remote_ip = conn.raddr.ip
+                                # Skip localhost/loopback
+                                if not remote_ip.startswith("127.") and remote_ip != "::1":
+                                    dest_ips.add(f"{remote_ip}:{conn.raddr.port}")
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        pass
+
                     open_files = p.open_files()
                     for f in open_files:
                         path = getattr(f, "path", None)
@@ -69,6 +108,21 @@ class NetworkMonitor:
 
                         fname = os.path.basename(path)
                         folder = os.path.dirname(path)
+
+                        # Try to get file size
+                        file_size_str = None
+                        try:
+                            if os.path.exists(path):
+                                fsize = os.path.getsize(path)
+                                if fsize >= 1024 * 1024:
+                                    file_size_str = f"{fsize / (1024 * 1024):.1f}MB"
+                                elif fsize >= 1024:
+                                    file_size_str = f"{fsize / 1024:.1f}KB"
+                                else:
+                                    file_size_str = f"{fsize}B"
+                        except (OSError, PermissionError):
+                            pass
+
                         upload_candidates.append({
                             "process_name": proc.info.get("name", "process"),
                             "pid": proc.info["pid"],
@@ -76,12 +130,14 @@ class NetworkMonitor:
                             "folder": folder,
                             "extension": ext,
                             "path": path,
+                            "file_size": file_size_str,
+                            "destinations": list(dest_ips)[:3],  # top 3 remote IPs
                         })
-                        if len(upload_candidates) >= 3:
+                        if len(upload_candidates) >= 5:
                             break
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
-                if upload_candidates:
+                if len(upload_candidates) >= 5:
                     break
         except Exception:
             pass
@@ -114,7 +170,7 @@ class NetworkMonitor:
 
         is_spike = (
             delta_mb >= self.MIN_UPLOAD_MB
-            and delta_mb >= self.SPIKE_FACTOR * max(baseline_mb, 1.0)
+            and delta_mb >= self.SPIKE_FACTOR * max(baseline_mb, 0.5)
         )
         if not is_spike:
             return
@@ -123,15 +179,33 @@ class NetworkMonitor:
         filename = None
         folder = None
         extension = None
-        details_text = f"Network upload spike of {delta_mb:.1f}MB in the last {self.POLL_SECONDS}s (baseline ~{baseline_mb:.1f}MB)"
+        process_name = None
+        file_size = None
+        destination = None
+
+        # Build details text parts
+        parts = [f"Network upload spike: {delta_mb:.1f}MB in {self.POLL_SECONDS}s (baseline ~{baseline_mb:.1f}MB)"]
 
         if top_files:
             cand = top_files[0]
             filename = cand["filename"]
             folder = cand["folder"]
             extension = cand["extension"]
+            process_name = cand["process_name"]
+            file_size = cand.get("file_size")
             folder_label = os.path.basename(folder) or folder
-            details_text = f"Network upload of {delta_mb:.1f}MB via {cand['process_name']} | File: {filename} in {folder_label}"
+
+            if cand.get("destinations"):
+                destination = cand["destinations"][0]
+
+            parts = [
+                f"Upload {delta_mb:.1f}MB via {process_name}",
+                f"File: {filename} ({file_size or 'unknown size'}) in {folder_label}",
+            ]
+            if destination:
+                parts.append(f"Destination: {destination}")
+
+        details_text = " | ".join(parts)
 
         self.callback({
             "event_type": "network_upload",
@@ -139,5 +213,6 @@ class NetworkMonitor:
             "filename": filename,
             "folder": folder,
             "extension": extension,
+            "size": file_size,
             "details": details_text,
         })

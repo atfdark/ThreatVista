@@ -15,10 +15,28 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') return;
+            console.error('[vite api proxy error]', err);
+          });
+        },
       },
       '/ws': {
         target: 'ws://127.0.0.1:8000',
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') return;
+            console.error('[vite ws proxy error]', err);
+          });
+          proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+            socket.on('error', (err) => {
+              if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED') return;
+              console.error('[vite ws socket error]', err);
+            });
+          });
+        },
       },
     },
   },

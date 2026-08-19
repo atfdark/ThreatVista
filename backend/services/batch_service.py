@@ -23,6 +23,7 @@ from backend.services.event_service import EventService
 from backend.services.alert_engine import RuleBasedAlertEngine
 from backend.services.config_service import get_thresholds
 from backend.services import incident_service
+from backend.websocket.manager import manager
 from ai.pipeline import AIPipeline
 
 _ai_pipeline = AIPipeline()
@@ -353,25 +354,16 @@ def run_ai_background(emp_ids: set, serialized_events: list, batch_alerts_data: 
             db.commit()
 
             # Broadcast AI results (risk updates + incident changes) via WebSocket.
-            # Use broadcast_nowait from within the thread by scheduling on the
-            # event loop.
             if incident_changes or risk_by_employee:
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-
                 for change in incident_changes:
                     msg = {"type": change["event_type"], "data": change["incident"]}
-                    if loop:
-                        loop.call_soon_threadsafe(manager.broadcast_nowait, msg)
+                    manager.broadcast_nowait(msg)
 
-                # Broadcast a risk-update message so the dashboard can refresh
-                # employee risk scores without waiting for the 15s poll.
+                # Broadcast a risk-update message so the dashboard & employee profile
+                # can refresh employee risk scores and historical graphs in real time.
                 if risk_by_employee:
                     risk_msg = {"type": "risk_update", "data": risk_by_employee}
-                    if loop:
-                        loop.call_soon_threadsafe(manager.broadcast_nowait, risk_msg)
+                    manager.broadcast_nowait(risk_msg)
 
         except Exception as exc:
             print(f"[batch-bg] Background AI processing error: {exc}")

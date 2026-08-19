@@ -7,13 +7,16 @@ import {
   ShieldAlert,
   ChevronRight,
   ArrowRight,
-  Radio
+  Radio,
+  Clock,
+  CheckCircle2
 } from 'lucide-react';
 import { ResponsiveContainer, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
 import { formatIST, formatISTClock, toISTDate } from '../utils/time';
 import IncidentCard from '../components/IncidentCard';
+import ActionApprovalModal from '../components/ActionApprovalModal';
 
 const LIVE_WINDOW_MINUTES = 15;
 
@@ -52,10 +55,16 @@ export default function Dashboard() {
   const [recentEvents, setRecentEvents] = useState([]);
   const [liveEvents, setLiveEvents] = useState([]);
   const [incidents, setIncidents] = useState([]);
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   // Forces the live chart's sliding window to advance even during quiet periods.
   const [, setClock] = useState(() => Date.now());
+
+  const fetchPending = () => {
+    api.getActionRequests('PENDING').then(setPendingApprovals).catch(() => {});
+  };
 
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
@@ -63,6 +72,8 @@ export default function Dashboard() {
       setLiveEvents(prev => [message.data, ...prev].slice(0, 200));
     } else if (message.type === 'new_alert') {
       setAlerts(prev => [message.data, ...prev].slice(0, 3));
+    } else if (message.type === 'action_request_created' || message.type === 'action_request_resolved' || message.type === 'REQUEST_EXPIRED') {
+      fetchPending();
     } else if (message.type === 'incident_created') {
       setIncidents(prev => [message.data, ...prev.filter(i => i.id !== message.data.id)].slice(0, 20));
     } else if (message.type === 'incident_updated' || message.type === 'incident_resolved' || message.type === 'incident_archived') {
@@ -108,21 +119,18 @@ export default function Dashboard() {
           const inc = ch.incident;
           if (ch.event_type === 'incident_created') {
             setIncidents(prev => [inc, ...prev.filter(i => i.id !== inc.id)].slice(0, 20));
-          } else {
+          } else if (ch.event_type === 'incident_updated') {
             setIncidents(prev => prev.map(i => (i.id === inc.id ? inc : i)));
+          } else if (ch.event_type === 'incident_resolved' || ch.event_type === 'incident_archived') {
+            setIncidents(prev => prev.filter(i => i.id !== inc.id));
           }
         }
-      } else if (d.summary) {
-        setIncidents(prev => [d, ...prev].slice(0, 20));
+      } else if (d.incidents && d.incidents.length) {
+        setIncidents(prev => [...d.incidents, ...prev.filter(i => !d.incidents.some(ni => ni.id === i.id))].slice(0, 20));
       }
-      // Keep the chart + raw metadata stream live with the batch's raw events.
-      // The batch arrives in collection order (oldest first), so sort it
-      // newest-first before prepending — otherwise the newest event ends up at
-      // the bottom of the stream and the slice keeps the wrong rows.
-      const evs = (d.events || []).slice().sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-      if (evs.length) {
-        setLiveEvents(prev => [...evs, ...prev].slice(0, 200));
-        setRecentEvents(prev => [...evs, ...prev].slice(0, 10));
+      if (d.events && d.events.length) {
+        setRecentEvents(prev => [...d.events.slice().reverse(), ...prev].slice(0, 10));
+        setLiveEvents(prev => [...d.events, ...prev].slice(0, 200));
       }
       if (d.alerts && d.alerts.length) {
         setAlerts(prev => [...d.alerts, ...prev].slice(0, 3));
@@ -142,61 +150,58 @@ export default function Dashboard() {
     setWsConnected(isConnected);
   }, [isConnected]);
 
-  // Rankings use persisted emp.risk_score / active incident from getEmployees.
-  // Do not mass-call getAIAnalysis — that rewrote Manual Override resets.
-
-  const primaryRisk = (emp) => (emp.incident?.risk_score ?? emp.risk_score);
+  // Primary risk score helper — mirrors EmployeeProfile/IncidentCard logic so
+  // employee ranking respects active incident scores.
+  const primaryRisk = (emp) => {
+    return (emp.incident && (emp.incident.status === 'ACTIVE' || emp.incident.status === 'INVESTIGATING'))
+      ? emp.incident.risk_score
+      : emp.risk_score;
+  };
 
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
+    const loadData = async () => {
       try {
-        const [statsData, empsData, alertsData, eventsData, incidentsData] = await Promise.all([
+        const [statsData, empsData, alertsData, eventsData, incidentsData, actionReqsData] = await Promise.all([
           api.getStats(),
           api.getEmployees(),
           api.getAlerts(),
-          api.getEvents(null, 50),
+          api.getEvents(200),
           api.getIncidents(),
+          api.getActionRequests('PENDING')
         ]);
-
         setStats(statsData);
         setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
         setAlerts(alertsData.slice(0, 3));
-        setRecentEvents((eventsData || []).slice(0, 10));
-        setLiveEvents(eventsData || []);
+        setRecentEvents(eventsData.slice(0, 10));
+        setLiveEvents(eventsData);
+        // Only show active/investigating incidents in the live ticker
         setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
-      } catch (err) {
-        console.error("Failed to load dashboard data", err);
+        setPendingApprovals(actionReqsData || []);
+      } catch (error) {
+        console.error("Failed to load dashboard data", error);
       } finally {
         setLoading(false);
       }
-    }
+    };
     loadData();
-  }, []);
 
-  // Live: refresh aggregate stats / employee risk / alerts periodically so the
-  // command overview updates without a manual reload. The WebSocket handles the
-  // instant event & alert feed above; this keeps the stat cards + rankings fresh.
-  useEffect(() => {
-    async function refresh() {
+    // Fallback polling every 5s for stats/employees/incidents
+    const t = setInterval(async () => {
       try {
-        const [statsData, empsData, alertsData, eventsData, incidentsData] = await Promise.all([
+        const [statsData, empsData, incidentsData, actionReqsData] = await Promise.all([
           api.getStats(),
           api.getEmployees(),
-          api.getAlerts(),
-          api.getEvents(null, 50),
           api.getIncidents(),
+          api.getActionRequests('PENDING')
         ]);
         setStats(statsData);
         setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
-        setAlerts(alertsData.slice(0, 3));
-        setLiveEvents(eventsData || []);
         setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
-      } catch (err) {
-        console.error("Failed to refresh dashboard", err);
+        setPendingApprovals(actionReqsData || []);
+      } catch {
+        /* ignore background poll error */
       }
-    }
-    const t = setInterval(refresh, 15000);
+    }, 5000);
     return () => clearInterval(t);
   }, []);
 
@@ -237,6 +242,13 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8 animate-fade-in">
+      {/* JIT Action Approval Modal */}
+      <ActionApprovalModal
+        isOpen={showApprovalModal}
+        onClose={() => setShowApprovalModal(false)}
+        onActionResolved={fetchPending}
+      />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Security Command Center</h2>
@@ -247,6 +259,31 @@ export default function Dashboard() {
           <span className="text-cyber-text">{wsConnected ? 'LIVE FEED ACTIVE' : 'OFFLINE MODE'}</span>
         </div>
       </div>
+
+      {/* Pending JIT Approvals Alert Banner */}
+      {pendingApprovals.length > 0 && (
+        <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-lg shadow-amber-500/5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 shrink-0">
+              <ShieldAlert className="h-6 w-6 animate-pulse" />
+            </div>
+            <div>
+              <div className="text-xs font-mono font-bold uppercase text-amber-400">
+                {pendingApprovals.length} Action Authorization Request{pendingApprovals.length > 1 ? 's' : ''} Pending
+              </div>
+              <div className="text-xs text-cyber-text mt-0.5">
+                Endpoint interceptor prevented unauthorized file deletion. Security Admin review required before disk execution.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setShowApprovalModal(true)}
+            className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-mono font-bold transition-colors cursor-pointer shrink-0 text-center"
+          >
+            Review Authorization Queue ({pendingApprovals.length}) →
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
         {statCards.map((card, i) => {

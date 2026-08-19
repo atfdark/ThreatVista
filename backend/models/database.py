@@ -31,10 +31,13 @@ class Employee(Base):
     alerts = relationship("Alert", back_populates="employee")
     risk_scores = relationship("RiskScore", back_populates="employee")
     behavior_profile = relationship("BehaviorProfile", back_populates="employee", uselist=False)
+    uba_profile = relationship("UserBehaviorProfile", back_populates="employee", uselist=False, cascade="all, delete-orphan")
+    anomalies = relationship("BehavioralAnomalyLog", back_populates="employee", cascade="all, delete-orphan")
     devices = relationship("Device", back_populates="employee", uselist=False)
     commands = relationship("RemoteCommand", back_populates="employee")
     incidents = relationship("Incident", back_populates="employee", cascade="all, delete-orphan")
     enrollment_tokens = relationship("AgentEnrollmentToken", back_populates="employee", cascade="all, delete-orphan")
+    action_requests = relationship("ActionRequest", back_populates="employee", cascade="all, delete-orphan")
 
 
 class Event(Base):
@@ -296,4 +299,86 @@ class SensitiveKeyword(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ActionRequest(Base):
+    """Real-time JIT Action Approval ticket.
+
+    Created when an endpoint agent intercepts an unauthorized or high-risk
+    action (such as deleting a protected file or exporting to USB). Remains
+    PENDING until a Security Admin approves or rejects it on the dashboard.
+    """
+    __tablename__ = "action_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    device_id = Column(String, nullable=True)
+    action_type = Column(String, nullable=False, default="file_delete")  # file_delete | usb_export | script_execution
+    target_file = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_size = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="PENDING")          # PENDING | APPROVED | REJECTED | EXPIRED
+    risk_context = Column(Text, nullable=True)                          # AI summary / reason for interception
+    
+    # Priority 1: AI File Sensitivity & Explainable Risk Scoring fields
+    file_classification = Column(String, default="INTERNAL", nullable=True)     # PUBLIC | INTERNAL | CONFIDENTIAL | RESTRICTED
+    classification_confidence = Column(Float, default=0.85, nullable=True)
+    classification_reason = Column(String, nullable=True)
+    calculated_risk_score = Column(Integer, default=0, nullable=True)          # 0 - 100
+    calculated_risk_level = Column(String, default="LOW", nullable=True)       # LOW | MEDIUM | HIGH
+    risk_explanation_json = Column(Text, default="[]", nullable=True)          # JSON list of contributing reasons
+
+    # Priority 1: Expiration tracking
+    requested_at = Column(DateTime, default=datetime.utcnow, index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String, nullable=True)                         # Admin username
+    resolution_notes = Column(String, nullable=True)
+
+    employee = relationship("Employee", back_populates="action_requests")
+
+
+class UserBehaviorProfile(Base):
+    """Employee User Behavior Analytics (UBA) & Digital Twin Profile."""
+    __tablename__ = "user_behavior_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, unique=True, index=True)
+    
+    # Time Baselines (24h float, e.g. 9.0 = 09:00 AM, 18.0 = 06:00 PM)
+    avg_login_hour = Column(Float, default=9.0, nullable=False)
+    avg_logout_hour = Column(Float, default=18.0, nullable=False)
+    
+    # Activity Baselines (rolling daily averages)
+    avg_files_accessed_per_day = Column(Float, default=15.0, nullable=False)
+    avg_files_deleted_per_day = Column(Float, default=1.0, nullable=False)
+    avg_files_copied_per_day = Column(Float, default=3.0, nullable=False)
+    avg_sensitive_file_accesses = Column(Float, default=1.0, nullable=False)
+    avg_usb_usage_per_week = Column(Float, default=0.0, nullable=False)
+    
+    # Common Workspaces & Classification
+    common_directories_json = Column(Text, default='["Projects", "Documents"]', nullable=False)
+    typical_sensitivity = Column(String, default="INTERNAL", nullable=False)
+    
+    last_updated = Column(DateTime, default=datetime.utcnow, index=True)
+
+    employee = relationship("Employee", back_populates="uba_profile")
+
+
+class BehavioralAnomalyLog(Base):
+    """Historical log of detected behavioral anomalies for an employee."""
+    __tablename__ = "behavioral_anomaly_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    anomaly_score = Column(Integer, nullable=False, default=50)  # 0 - 100
+    severity = Column(String, nullable=False, default="MEDIUM")   # LOW | MEDIUM | HIGH
+    indicators_json = Column(Text, default="[]", nullable=False)  # JSON list of anomaly reasons
+    deviations_json = Column(Text, default="{}", nullable=False)  # JSON dictionary of deviation details
+    context = Column(Text, nullable=True)
+    detected_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    employee = relationship("Employee", back_populates="anomalies")
+
+
 

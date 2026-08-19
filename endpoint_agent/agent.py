@@ -31,6 +31,8 @@ from endpoint_agent.monitors.system_monitor import (
     get_system_metrics,
     get_running_processes,
 )
+from endpoint_agent.protection.vault import ShadowVault
+from endpoint_agent.protection.action_client import ActionProtectionClient
 
 HEARTBEAT_SECONDS = int(os.environ.get("AGENT_HEARTBEAT_SECONDS", "30"))
 
@@ -52,6 +54,10 @@ class EndpointAgent:
             or os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
         )
         set_backend_url(initial_url)
+
+        # Active Protection & JIT Authorization components
+        self.vault = ShadowVault()
+        self.action_client = ActionProtectionClient(self.vault)
 
         # Collect telemetry for ~1s (or 100 events) and send it as one bulk
         # request instead of one HTTP POST per event.
@@ -173,6 +179,7 @@ class EndpointAgent:
             return  # token rejected / no identity — do not monitor under a wrong employee
 
         self.running = True
+        self.action_client.set_identity(self.employee_id, self.device_id)
 
         # Heartbeat loop — keeps this device "online" in the SOC dashboard.
         def heartbeat_loop():
@@ -191,9 +198,24 @@ class EndpointAgent:
 
         threading.Thread(target=heartbeat_loop, daemon=True).start()
 
-        # File monitoring
-        file_observer = start_file_monitoring(self._event_callback)
-        print("[+] File monitor started")
+        # Action approval polling loop (syncs with Admin approvals)
+        def approval_loop():
+            while self.running:
+                try:
+                    self.action_client.check_for_approvals()
+                except Exception:
+                    pass
+                time.sleep(3)
+
+        threading.Thread(target=approval_loop, daemon=True).start()
+
+        # File monitoring with Active Protection & Shadow Vault
+        file_observer = start_file_monitoring(
+            self._event_callback,
+            vault=self.vault,
+            action_client=self.action_client
+        )
+        print("[+] File monitor & Active Shadow Vault started")
 
         # USB monitoring
         self._usb_monitor = USBMonitor(self._event_callback)

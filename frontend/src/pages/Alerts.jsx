@@ -26,7 +26,7 @@ export default function Alerts() {
   const [endpoints, setEndpoints] = useState([]);
   const [severityFilter, setSeverityFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [onlineOnly, setOnlineOnly] = useState(true); // Default to online employees as requested
+  const [onlineOnly, setOnlineOnly] = useState(false); // Default to showing all alerts so newly recorded events are immediately visible
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -66,12 +66,14 @@ export default function Alerts() {
     }
   });
 
-  // Calculate online employee IDs set
+  // Calculate online employee IDs set correctly from endpoints API ({ employee: {...}, device: { online: bool } })
   const onlineEmployeeIds = useMemo(() => {
     const ids = new Set();
     endpoints.forEach(ep => {
-      if (ep.online && ep.employee_id) {
-        ids.add(ep.employee_id);
+      const isDevOnline = ep.device ? Boolean(ep.device.online) : Boolean(ep.online);
+      const empId = ep.employee ? ep.employee.id : ep.employee_id;
+      if (isDevOnline && empId) {
+        ids.add(empId);
       }
     });
     return ids;
@@ -100,7 +102,8 @@ export default function Alerts() {
     return alerts.filter(alert => {
       const matchesSeverity = severityFilter === 'All' || alert.severity === severityFilter;
       const matchesStatus = statusFilter === 'All' || alert.status === statusFilter;
-      const matchesOnline = !onlineOnly || onlineEmployeeIds.has(alert.employee?.id) || onlineEmployeeIds.has(alert.employee_id);
+      const empId = alert.employee?.id || alert.employee_id;
+      const matchesOnline = !onlineOnly || (empId && onlineEmployeeIds.has(empId));
       const empName = alert.employee?.name || '';
       const reason = alert.reason || '';
       const matchesSearch = empName.toLowerCase().includes(searchTerm.toLowerCase()) ||

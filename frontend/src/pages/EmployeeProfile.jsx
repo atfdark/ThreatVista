@@ -29,7 +29,10 @@ import {
   PlusCircle,
   Edit3,
   Move,
-  Clock
+  Clock,
+  Upload,
+  Wifi,
+  Globe
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
@@ -208,6 +211,8 @@ export default function EmployeeProfile() {
           if (existing.some(e => e.id === evt.id)) return prev;
           return { ...prev, events: [evt, ...existing] };
         });
+        if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+        reloadDebounceRef.current = setTimeout(() => loadData(true), 600);
       } else if (!id) {
         if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
         reloadDebounceRef.current = setTimeout(() => loadData(true), 800);
@@ -229,6 +234,8 @@ export default function EmployeeProfile() {
             if (!newItems.length) return prev;
             return { ...prev, events: [...newItems, ...existing] };
           });
+          if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+          reloadDebounceRef.current = setTimeout(() => loadData(true), 600);
         }
       } else {
         if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
@@ -259,7 +266,23 @@ export default function EmployeeProfile() {
           const model_anomaly = empData.model_anomaly;
           const model_score = empData.model_score;
 
-          setEmployee(prev => prev ? { ...prev, risk_score: risk_score ?? prev.risk_score, status: status ?? prev.status } : prev);
+          setEmployee(prev => {
+            if (!prev) return prev;
+            const currentScores = [...(prev.risk_scores || [])];
+            if (risk_score !== undefined) {
+              currentScores.push({
+                recorded_at: new Date().toISOString(),
+                score: risk_score
+              });
+            }
+            return {
+              ...prev,
+              risk_score: risk_score ?? prev.risk_score,
+              status: status ?? prev.status,
+              risk_scores: currentScores
+            };
+          });
+
           setAiAnalysis(prev => ({
             ...(prev || {}),
             risk_score: risk_score ?? prev?.risk_score ?? 0,
@@ -270,6 +293,9 @@ export default function EmployeeProfile() {
             model_anomaly: model_anomaly ?? prev?.model_anomaly ?? false,
             model_score: model_score ?? prev?.model_score ?? 0,
           }));
+
+          if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
+          reloadDebounceRef.current = setTimeout(() => loadData(true), 800);
         }
       } else {
         if (reloadDebounceRef.current) clearTimeout(reloadDebounceRef.current);
@@ -373,9 +399,9 @@ export default function EmployeeProfile() {
     }
     if (t.includes('network')) {
       return {
-        label: type.toUpperCase(),
-        icon: Activity,
-        style: 'text-blue-400 bg-blue-500/15 border-blue-500/35 font-bold'
+        label: 'NETWORK UPLOAD',
+        icon: Upload,
+        style: 'text-sky-400 bg-sky-500/15 border-sky-500/35 font-bold'
       };
     }
     return {
@@ -401,10 +427,13 @@ export default function EmployeeProfile() {
   // ==========================================
   if (id && employee) {
     const dna = employee.behavior_profile || {};
-    const chartData = (employee.risk_scores || []).map(r => ({
+    const rawChartData = (employee.risk_scores || []).map(r => ({
       date: formatIST(r.recorded_at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
       score: r.score
     }));
+    const chartData = rawChartData.length === 1 
+      ? [{ date: 'Baseline', score: rawChartData[0].score }, rawChartData[0]] 
+      : rawChartData;
 
     const activeInc = employee.incident || null;
     const headerRisk = activeInc ? activeInc.risk_score : employee.risk_score;
@@ -907,10 +936,29 @@ export default function EmployeeProfile() {
               const badge = getEventTypeBadge(evt.event_type);
               const BadgeIcon = badge.icon;
               const isDelete = (evt.event_type || '').toLowerCase().includes('delete');
+              const isNetwork = evt.event_type === 'network_upload';
+              // Parse network details from details string
+              const networkInfo = isNetwork ? (() => {
+                const d = evt.details || '';
+                const mbMatch = d.match(/(\d+\.\d+)MB/);
+                const viaMatch = d.match(/via\s+([\w.]+)/);
+                const destMatch = d.match(/Destination:\s+([\d.:]+)/);
+                const fileMatch = d.match(/File:\s+(.+?)\s+(?:\(|in\s)/);
+                const sizeMatch = d.match(/\(([\d.]+(?:MB|KB|B))\)/);
+                return {
+                  uploadMB: mbMatch ? mbMatch[1] : (evt.network_upload || '').replace('MB', ''),
+                  process: viaMatch ? viaMatch[1] : null,
+                  destination: destMatch ? destMatch[1] : null,
+                  file: fileMatch ? fileMatch[1] : evt.filename,
+                  fileSize: sizeMatch ? sizeMatch[1] : evt.size,
+                };
+              })() : null;
+
               return (
                 <div 
                   key={evt.id || idx} 
                   className={`p-3 bg-cyber-bg/70 border rounded-lg flex flex-col gap-2 text-xs font-mono transition-all ${
+                    isNetwork ? 'border-sky-500/30 hover:border-sky-500/60 bg-sky-950/10' :
                     isDelete ? 'border-rose-500/30 hover:border-rose-500/60 bg-rose-950/10' : 'border-cyber-border/70 hover:border-cyber-primary/40'
                   }`}
                 >
@@ -923,9 +971,16 @@ export default function EmployeeProfile() {
                       <span className="text-cyber-text font-bold truncate text-xs">
                         {evt.filename || evt.details || evt.folder || 'Telemetry event'}
                       </span>
+                      {/* Prominent MB badge for network uploads */}
+                      {isNetwork && (evt.network_upload || networkInfo?.uploadMB) && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-sky-500/20 text-sky-300 border-sky-500/40 flex items-center gap-1 shrink-0">
+                          <Upload className="h-3 w-3" />
+                          {evt.network_upload || `${networkInfo.uploadMB}MB`}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-[10px] text-cyber-muted shrink-0">
-                      {evt.size && (
+                      {evt.size && evt.size !== 'Unknown' && evt.size !== '0.0MB' && (
                         <span className="px-1.5 py-0.5 bg-cyber-card border border-cyber-border rounded text-[10px] text-cyber-text">
                           {evt.size}
                         </span>
@@ -942,15 +997,50 @@ export default function EmployeeProfile() {
                     </div>
                   </div>
 
+                  {/* Network upload details: process, file, destination */}
+                  {isNetwork && networkInfo && (
+                    <div className="flex flex-wrap gap-2">
+                      {networkInfo.process && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono bg-cyber-bg/60 px-2.5 py-1.5 rounded border border-cyber-border/50">
+                          <Wifi className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                          <span className="text-cyber-muted uppercase text-[9px] tracking-wider font-bold">Process:</span>
+                          <span className="text-sky-300 font-bold">{networkInfo.process}</span>
+                        </div>
+                      )}
+                      {networkInfo.fileSize && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono bg-cyber-bg/60 px-2.5 py-1.5 rounded border border-cyber-border/50">
+                          <FileText className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                          <span className="text-cyber-muted uppercase text-[9px] tracking-wider font-bold">File Size:</span>
+                          <span className="text-cyan-300 font-bold">{networkInfo.fileSize}</span>
+                        </div>
+                      )}
+                      {networkInfo.destination && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono bg-cyber-bg/60 px-2.5 py-1.5 rounded border border-cyber-border/50">
+                          <Globe className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                          <span className="text-cyber-muted uppercase text-[9px] tracking-wider font-bold">Destination:</span>
+                          <span className="text-amber-300 font-bold">{networkInfo.destination}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Prominent Location / Source Path Line */}
                   {(evt.folder || evt.details) && (
                     <div className="flex items-center gap-1.5 text-[11px] font-mono text-cyber-muted bg-cyber-bg/60 px-2.5 py-1.5 rounded border border-cyber-border/50 break-all">
                       <Folder className="h-3.5 w-3.5 text-cyber-primary shrink-0" />
                       <span className="text-cyber-muted uppercase text-[9px] tracking-wider font-bold">
-                        {isDelete ? 'Deleted From Location:' : 'Path / Directory:'}
+                        {isNetwork ? 'Source Path:' : isDelete ? 'Deleted From Location:' : 'Path / Directory:'}
                       </span>
                       <span className="text-cyber-text font-medium selection:bg-cyber-primary/20">
-                        {evt.folder || evt.details}
+                        {(() => {
+                          const f = evt.folder || '';
+                          const isFolderEvt = (evt.event_type || '').toLowerCase().startsWith('folder_');
+                          if (isFolderEvt && evt.filename && !f.toLowerCase().endsWith(evt.filename.toLowerCase())) {
+                            const sep = f.endsWith('\\') || f.endsWith('/') ? '' : '\\';
+                            return f ? `${f}${sep}${evt.filename}` : evt.filename;
+                          }
+                          return f || evt.details;
+                        })()}
                       </span>
                     </div>
                   )}

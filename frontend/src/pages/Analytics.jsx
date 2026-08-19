@@ -1,31 +1,52 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, AreaChart, Area, CartesianGrid, Legend, Cell } from 'recharts';
-import { BarChart3, ShieldAlert, Cpu, HardDrive, Network, BrainCircuit, Activity, Key, Building2, Tag } from 'lucide-react';
+import { BarChart3, ShieldAlert, Cpu, HardDrive, Network, BrainCircuit, Activity, Key, Building2, Tag, RefreshCw } from 'lucide-react';
 import { api } from '../services/mockData';
+import { useWebSocket } from '../services/websocket';
 
 export default function Analytics() {
   const [analytics, setAnalytics] = useState(null);
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const debounceRef = useRef(null);
+
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const [anaData, dashData] = await Promise.all([
+        api.getAnalytics(),
+        api.getStats()
+      ]);
+      setAnalytics(anaData);
+      setDashboardData(dashData);
+    } catch (err) {
+      console.error("Failed to load analytics data", err);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        const [anaData, dashData] = await Promise.all([
-          api.getAnalytics(),
-          api.getStats()
-        ]);
-        setAnalytics(anaData);
-        setDashboardData(dashData);
-      } catch (err) {
-        console.error("Failed to load analytics data", err);
-      } finally {
-        setLoading(false);
-      }
-    }
     loadData();
-  }, []);
+    // Periodic refresh every 10s to sync live aggregations
+    const interval = setInterval(() => loadData(true), 10000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  // Live WebSocket listener to update charts instantly as telemetry/risk changes
+  useWebSocket((msg) => {
+    if (
+      msg.type === 'new_event' ||
+      msg.type === 'batch_event' ||
+      msg.type === 'risk_update' ||
+      msg.type === 'new_alert' ||
+      msg.type === 'incident_created' ||
+      msg.type === 'incident_resolved'
+    ) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => loadData(true), 800);
+    }
+  });
 
   if (loading) {
     return (
@@ -191,9 +212,16 @@ export default function Analytics() {
           </div>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={sensitiveAssetsData}>
+              <BarChart data={sensitiveAssetsData} margin={{ top: 10, right: 10, left: -10, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
-                <XAxis dataKey="keyword" stroke="#64748b" fontSize={11} tickLine={false} />
+                <XAxis 
+                  dataKey="keyword" 
+                  stroke="#64748b" 
+                  fontSize={10} 
+                  tickLine={false} 
+                  interval={0}
+                  tickFormatter={(str) => (str || '').replace('_', ' ')}
+                />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
                 <Tooltip 
                   contentStyle={{ backgroundColor: '#0f1626', borderColor: '#1e293b', borderRadius: 8, fontSize: 11 }}

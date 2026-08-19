@@ -30,6 +30,9 @@ from backend.services.agent_service import (
     is_online,
 )
 from backend.services.command_service import request_command, list_commands, ALLOWED_COMMANDS
+from backend.services import action_request_service
+from backend.services import user_behavior_service
+from backend.services import digital_twin_service
 from backend.reports.report_service import generate_report, REPORT_TYPES
 from backend.websocket.manager import manager
 from ai.role_config import get_role_config, get_all_role_baselines, get_supported_roles
@@ -669,11 +672,29 @@ def get_dashboard(
     risk_scores = []
     dept_scores = defaultdict(list)
 
+    # Department normalization map
+    dept_map = {
+        "hr": "Human Resources",
+        "human resources": "Human Resources",
+        "dev": "Engineering",
+        "developer": "Engineering",
+        "engineering": "Engineering",
+        "eng": "Engineering",
+        "finance": "Finance",
+        "sales": "Sales",
+        "it": "IT Support",
+        "it support": "IT Support",
+        "marketing": "Marketing",
+        "management": "Management",
+        "legal": "Legal",
+    }
+
     for emp in employees:
         active_inc = incident_service.get_active_incident(db, emp.id)
         primary = active_inc.risk_score if active_inc else (emp.risk_score or 0)
         risk_scores.append(primary)
-        dept = emp.department or "General"
+        raw_dept = (emp.department or "General").strip()
+        dept = dept_map.get(raw_dept.lower(), raw_dept.title())
         role = emp.role_type or "General"
         dept_scores[dept].append((primary, role))
 
@@ -2155,7 +2176,199 @@ def create_command(
 def get_commands(
     employee_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(soc_only),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
 ):
     """List recent commands issued to an employee's endpoint."""
     return list_commands(db, employee_id, limit=20)
+
+
+# ---------------------------------------------------------------------------
+# Action Request (JIT Admin Authorization) Endpoints
+# ---------------------------------------------------------------------------
+class ActionRequestCreate(BaseModel):
+    employee_id: int
+    target_file: str
+    file_path: str
+    action_type: str = "file_delete"
+    device_id: Optional[str] = None
+    file_size: Optional[str] = None
+    risk_context: Optional[str] = None
+
+
+class ActionRequestResolve(BaseModel):
+    notes: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.post("/action-requests")
+def create_action_request_endpoint(
+    payload: ActionRequestCreate,
+    db: Session = Depends(get_db),
+):
+    """Endpoint for agent to submit an intercepted action request for Admin review."""
+    try:
+        req = action_request_service.create_action_request(
+            db=db,
+            employee_id=payload.employee_id,
+            target_file=payload.target_file,
+            file_path=payload.file_path,
+            action_type=payload.action_type,
+            device_id=payload.device_id,
+            file_size=payload.file_size,
+            risk_context=payload.risk_context,
+        )
+        return req
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/action-requests")
+def list_action_requests_endpoint(
+    status: Optional[str] = Query(None, description="Filter by status: PENDING, APPROVED, REJECTED"),
+    employee_id: Optional[int] = Query(None, description="Filter by employee id"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """List action requests."""
+    return action_request_service.list_action_requests(db=db, status=status, employee_id=employee_id, limit=limit)
+
+
+@router.get("/action-requests/pending-count")
+def get_pending_action_requests_count_endpoint(
+    db: Session = Depends(get_db),
+):
+    """Fast count of pending action requests for UI badge."""
+    count = action_request_service.get_pending_count(db)
+    return {"pending_count": count}
+
+
+@router.post("/action-requests/{request_id}/approve")
+def approve_action_request_endpoint(
+    request_id: int,
+    payload: Optional[ActionRequestResolve] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Approve a pending action request."""
+    try:
+        res = action_request_service.approve_action_request(
+            db=db,
+            request_id=request_id,
+            admin_name=current_user.username if current_user else "Admin",
+            notes=payload.notes if payload else None,
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/action-requests/{request_id}/reject")
+def reject_action_request_endpoint(
+    request_id: int,
+    payload: Optional[ActionRequestResolve] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Reject a pending action request."""
+    try:
+        res = action_request_service.reject_action_request(
+            db=db,
+            request_id=request_id,
+            admin_name=current_user.username if current_user else "Admin",
+            reason=(payload.reason or payload.notes) if payload else None,
+        )
+        return res
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# --- Priority 2: User Behavior Analytics & Digital Twin Endpoints ------------
+@router.get("/users/{user_id}/behavior-profile")
+def get_user_behavior_profile_endpoint(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Retrieve or compute rolling 30-day User Behavior Profile for an employee."""
+    emp = db.query(models.Employee).filter(models.Employee.id == user_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail=f"Employee #{user_id} not found")
+    profile = user_behavior_service.get_or_create_behavior_profile(db, user_id)
+    return user_behavior_service.profile_to_dict(profile)
+
+
+@router.get("/users/{user_id}/digital-twin")
+def get_user_digital_twin_endpoint(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Retrieve human-readable Employee Digital Twin behavioral baseline fingerprint."""
+    try:
+        return digital_twin_service.generate_employee_baseline(db, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/users/{user_id}/anomaly-history")
+def get_user_anomaly_history_endpoint(
+    user_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """List historical behavioral anomaly detection logs for an employee."""
+    import json
+    logs = (
+        db.query(models.BehavioralAnomalyLog)
+        .filter(models.BehavioralAnomalyLog.employee_id == user_id)
+        .order_by(models.BehavioralAnomalyLog.detected_at.desc())
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for l in logs:
+        indicators = []
+        deviations = {}
+        try:
+            indicators = json.loads(l.indicators_json)
+        except Exception:
+            pass
+        try:
+            deviations = json.loads(l.deviations_json)
+        except Exception:
+            pass
+        result.append({
+            "id": l.id,
+            "employee_id": l.employee_id,
+            "anomaly_score": l.anomaly_score,
+            "severity": l.severity,
+            "indicators": indicators,
+            "deviations": deviations,
+            "context": l.context,
+            "detected_at": l.detected_at.isoformat() if l.detected_at else None,
+        })
+    return result
+
+
+@router.get("/users/{user_id}/risk-history")
+def get_user_risk_history_endpoint(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Retrieve historical risk score timeline for an employee."""
+    scores = (
+        db.query(models.RiskScore)
+        .filter(models.RiskScore.employee_id == user_id)
+        .order_by(models.RiskScore.timestamp.desc())
+        .limit(30)
+        .all()
+    )
+    return [
+        {
+            "id": s.id,
+            "score": s.score,
+            "reason": s.reason,
+            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+        }
+        for s in scores
+    ]
+
+

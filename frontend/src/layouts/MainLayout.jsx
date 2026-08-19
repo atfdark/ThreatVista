@@ -1,8 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
-import { UserCheck, Volume2, VolumeX, Bell, Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { UserCheck, Volume2, VolumeX, Bell, Wifi, WifiOff, RefreshCw, ShieldAlert } from 'lucide-react';
 import Sidebar from '../components/Sidebar';
 import SecurityAlertPopup from '../components/SecurityAlertPopup';
+import ActionApprovalModal from '../components/ActionApprovalModal';
+import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
 import { formatIST } from '../utils/time';
 import { playSecurityAlertSound, startAlertBeepLoop, stopAlertBeepLoop, playAcknowledgeSound, isSoundEnabled, setSoundEnabled, testAlertSound } from '../utils/sound';
@@ -12,6 +14,21 @@ export default function MainLayout() {
   const [toast, setToast] = useState(null);
   const [securityAlerts, setSecurityAlerts] = useState([]);
   const [soundActive, setSoundActive] = useState(() => isSoundEnabled());
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+
+  const fetchPendingApprovals = useCallback(async () => {
+    try {
+      const count = await api.getPendingActionRequestsCount();
+      setPendingApprovalsCount(count || 0);
+    } catch {
+      /* ignore background error */
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPendingApprovals();
+  }, [fetchPendingApprovals]);
 
   useEffect(() => {
     const token = localStorage.getItem('threatvista_token');
@@ -84,6 +101,19 @@ export default function MainLayout() {
         at: d.at,
       });
       window.setTimeout(() => setToast(null), 6000);
+    } else if (msg.type === 'action_request_created') {
+      if (msg.pending_count !== undefined) {
+        setPendingApprovalsCount(msg.pending_count);
+      } else {
+        setPendingApprovalsCount((prev) => prev + 1);
+      }
+      playSecurityAlertSound();
+    } else if (msg.type === 'action_request_resolved' || msg.type === 'REQUEST_EXPIRED') {
+      if (msg.pending_count !== undefined) {
+        setPendingApprovalsCount(msg.pending_count);
+      } else {
+        setPendingApprovalsCount((prev) => Math.max(0, prev - 1));
+      }
     } else if (msg.type === 'security_alert') {
       const alertData = msg.data || {};
       // Start continuous beep loop
@@ -109,6 +139,13 @@ export default function MainLayout() {
 
   return (
     <div className="flex h-screen bg-cyber-bg text-cyber-text cyber-grid">
+      {/* JIT Action Approval Modal */}
+      <ActionApprovalModal
+        isOpen={showApprovalModal}
+        onClose={() => setShowApprovalModal(false)}
+        onActionResolved={fetchPendingApprovals}
+      />
+
       {/* Real-time Security Alert Pop-up Modal (HUD) */}
       <SecurityAlertPopup
         alerts={securityAlerts}
@@ -159,11 +196,30 @@ export default function MainLayout() {
 
           {/* Quick Header Controls */}
           <div className="flex items-center gap-3">
+            {/* JIT Action Approvals Button */}
+            <button
+              onClick={() => setShowApprovalModal(true)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer ${
+                pendingApprovalsCount > 0
+                  ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 animate-pulse shadow-lg shadow-amber-500/10'
+                  : 'bg-cyber-card/80 border-cyber-border/60 text-cyber-muted hover:text-cyber-text hover:border-cyber-primary/40'
+              }`}
+              title="JIT Action Approvals Queue"
+            >
+              <ShieldAlert className={`h-3.5 w-3.5 ${pendingApprovalsCount > 0 ? 'text-amber-400' : 'text-cyber-muted'}`} />
+              <span>JIT APPROVALS</span>
+              {pendingApprovalsCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black text-[10px] font-black">
+                  {pendingApprovalsCount}
+                </span>
+              )}
+            </button>
+
             {/* Audio Alert Controls */}
             <div className="flex items-center gap-1.5 bg-cyber-card/80 border border-cyber-border/60 rounded-lg px-2 py-1">
               <button
                 onClick={handleToggleSound}
-                className="flex items-center gap-1.5 text-xs font-mono text-cyber-muted hover:text-cyber-primary transition-colors"
+                className="flex items-center gap-1.5 text-xs font-mono text-cyber-muted hover:text-cyber-primary transition-colors cursor-pointer"
                 title={soundActive ? 'Sound Alerts: Enabled' : 'Sound Alerts: Muted'}
               >
                 {soundActive ? (
@@ -178,7 +234,7 @@ export default function MainLayout() {
 
               <button
                 onClick={handleTestSound}
-                className="text-[9px] font-mono text-cyber-muted hover:text-cyber-accent transition-colors px-1 uppercase tracking-wider"
+                className="text-[9px] font-mono text-cyber-muted hover:text-cyber-accent transition-colors px-1 uppercase tracking-wider cursor-pointer"
                 title="Test Alert Chime"
               >
                 TEST
