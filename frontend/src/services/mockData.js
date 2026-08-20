@@ -175,8 +175,24 @@ export const api = {
     }
   },
 
-  getEvents: async (employeeId = null, limit = 20) => {
+  getEvents: async (employeeIdOrLimit = null, maybeLimit = 50) => {
     try {
+      let employeeId = null;
+      let limit = 50;
+
+      if (typeof employeeIdOrLimit === 'object' && employeeIdOrLimit !== null) {
+        employeeId = employeeIdOrLimit.employee_id ?? employeeIdOrLimit.employeeId ?? null;
+        limit = employeeIdOrLimit.limit ?? 50;
+      } else if (employeeIdOrLimit !== null && maybeLimit !== 50) {
+        employeeId = employeeIdOrLimit;
+        limit = maybeLimit;
+      } else if (typeof employeeIdOrLimit === 'number' && employeeIdOrLimit > 0) {
+        // If single numeric parameter passed (e.g. api.getEvents(200)), treat as limit
+        limit = employeeIdOrLimit;
+      } else {
+        employeeId = employeeIdOrLimit;
+      }
+
       const url = employeeId ? `/events?employee_id=${employeeId}&limit=${limit}` : `/events?limit=${limit}`;
       const res = await http.get(url);
       return res.data;

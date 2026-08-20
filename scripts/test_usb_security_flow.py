@@ -49,10 +49,16 @@ def run_tests():
     auth_headers = get_headers(admin_token)
     print("  [✓] Admin authenticated successfully.")
 
+    emps_res = requests.get(f"{API_BASE}/employees", headers=auth_headers)
+    assert emps_res.status_code == 200
+    emps = emps_res.json()
+    assert len(emps) > 0, "No employees found in DB"
+    target_emp_id = emps[0]["id"]
+
     # 1. Test Event Ingestion with Rich Hardware Metadata
     print("\n[2/6] Ingesting USB connection event with deep hardware metadata...")
     usb_event_payload = {
-        "employee_id": 2, # Amit (Sales)
+        "employee_id": target_emp_id,
         "event_type": "usb_insert",
         "usb_status": "SanDisk Ultra 3.0 (E:) - 32.0GB NTFS",
         "device_name": "SanDisk Ultra 3.0",
@@ -81,7 +87,7 @@ def run_tests():
     alerts_res = requests.get(f"{API_BASE}/alerts", headers=auth_headers)
     assert alerts_res.status_code == 200
     alerts = alerts_res.json()
-    usb_alerts = [a for a in alerts if a["employee"]["id"] == 2 and "USB" in a["reason"]]
+    usb_alerts = [a for a in alerts if a["employee"]["id"] == target_emp_id and "USB" in a["reason"]]
     assert len(usb_alerts) > 0, "Expected USB alert to be created"
     test_alert = usb_alerts[0]
     alert_id = test_alert["id"]

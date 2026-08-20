@@ -896,12 +896,15 @@ async def delete_employee(
         emp_name = emp.name
         emp_email = emp.email
 
-        # 1. Delete associated Incidents, Events, Alerts, Risk Scores, Behavior Profiles, Commands, Tokens, Devices
+        # 1. Delete associated Incidents, Events, Alerts, Risk Scores, Profiles, Anomalies, Actions, Commands, Tokens, Devices
         db.query(models.Incident).filter(models.Incident.employee_id == employee_id).delete()
         db.query(models.Event).filter(models.Event.employee_id == employee_id).delete()
         db.query(models.Alert).filter(models.Alert.employee_id == employee_id).delete()
         db.query(models.RiskScore).filter(models.RiskScore.employee_id == employee_id).delete()
         db.query(models.BehaviorProfile).filter(models.BehaviorProfile.employee_id == employee_id).delete()
+        db.query(models.UserBehaviorProfile).filter(models.UserBehaviorProfile.employee_id == employee_id).delete()
+        db.query(models.BehavioralAnomalyLog).filter(models.BehavioralAnomalyLog.employee_id == employee_id).delete()
+        db.query(models.ActionRequest).filter(models.ActionRequest.employee_id == employee_id).delete()
         db.query(models.RemoteCommand).filter(models.RemoteCommand.employee_id == employee_id).delete()
         db.query(models.AgentEnrollmentToken).filter(models.AgentEnrollmentToken.employee_id == employee_id).delete()
         db.query(models.Device).filter(models.Device.employee_id == employee_id).delete()
@@ -911,6 +914,7 @@ async def delete_employee(
             (models.User.username == emp_email) | (models.User.username == emp_name)
         ).first()
         if user_account:
+            db.query(models.AuditLog).filter(models.AuditLog.user_id == user_account.id).update({models.AuditLog.user_id: None})
             db.query(models.Session).filter(models.Session.user_id == user_account.id).delete()
             db.delete(user_account)
 
@@ -1282,7 +1286,15 @@ async def create_event(
         )
 
     event_data = event.model_dump()
-    emp_id = event_data.get("employee_id", 1)
+    emp_id = event_data.get("employee_id")
+    emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first() if emp_id else None
+    if not emp:
+        emp = db.query(models.Employee).first()
+        if not emp:
+            raise HTTPException(status_code=400, detail="No registered employees found in system")
+        event_data["employee_id"] = emp.id
+        emp_id = emp.id
+
     e_type = event_data.get("event_type", "")
     dedup_key = event_data.get("serial_number") or event_data.get("drive_letter") or event_data.get("filename") or event_data.get("usb_status") or ""
 
@@ -1380,6 +1392,14 @@ async def create_event_batch(
         return {"ingested": 0, "incidents": 0}
 
     event_data = [evt.model_dump() for evt in payload.events]
+
+    valid_emp_ids = {r[0] for r in db.query(models.Employee.id).all()}
+    if not valid_emp_ids:
+        return {"ingested": 0, "incidents": 0}
+    default_emp_id = next(iter(valid_emp_ids))
+    for evt in event_data:
+        if evt.get("employee_id") not in valid_emp_ids:
+            evt["employee_id"] = default_emp_id
 
     # Fast path: insert + broadcast immediately (no AI pipeline).
     result = batch_service.process_batch_fast(db, event_data)

@@ -31,6 +31,7 @@ function buildLiveSeries(events, now = Date.now()) {
       usb: 0,
       network: 0,
       files: 0,
+      processes: 0,
       total: 0,
     });
   }
@@ -43,6 +44,7 @@ function buildLiveSeries(events, now = Date.now()) {
     if (evt.event_type === 'usb_insert') bucket.usb += 1;
     else if (evt.event_type.startsWith('file_') || evt.event_type.startsWith('folder_')) bucket.files += 1;
     else if (evt.event_type === 'network_upload') bucket.network += 1;
+    else if (evt.event_type.startsWith('process_')) bucket.processes += 1;
   }
   return buckets;
 }
@@ -165,7 +167,7 @@ export default function Dashboard() {
           api.getStats(),
           api.getEmployees(),
           api.getAlerts(),
-          api.getEvents(200),
+          api.getEvents(null, 200),
           api.getIncidents(),
           api.getActionRequests('PENDING')
         ]);
@@ -185,19 +187,23 @@ export default function Dashboard() {
     };
     loadData();
 
-    // Fallback polling every 5s for stats/employees/incidents
+    // Fallback polling every 5s for stats/employees/incidents/events
     const t = setInterval(async () => {
       try {
-        const [statsData, empsData, incidentsData, actionReqsData] = await Promise.all([
+        const [statsData, empsData, incidentsData, actionReqsData, eventsData] = await Promise.all([
           api.getStats(),
           api.getEmployees(),
           api.getIncidents(),
-          api.getActionRequests('PENDING')
+          api.getActionRequests('PENDING'),
+          api.getEvents(null, 200),
         ]);
         setStats(statsData);
         setEmployees(empsData.sort((a, b) => primaryRisk(b) - primaryRisk(a)));
         setIncidents((incidentsData || []).filter(i => i.status === 'ACTIVE' || i.status === 'INVESTIGATING'));
         setPendingApprovals(actionReqsData || []);
+        if (eventsData && eventsData.length) {
+          setLiveEvents(eventsData);
+        }
       } catch {
         /* ignore background poll error */
       }
@@ -330,6 +336,7 @@ export default function Dashboard() {
                 <Bar dataKey="usb" fill="#06b6d4" name="USB Inserts" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="network" fill="#3b82f6" name="Network Uploads" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="files" fill="#a855f7" name="File Activity" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="processes" fill="#10b981" name="Process Activity" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
