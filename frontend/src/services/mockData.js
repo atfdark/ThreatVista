@@ -480,6 +480,16 @@ export const api = {
     return res.data;
   },
 
+  batchResolveActionRequests: async (requestIds, action = 'approve', notes = '') => {
+    const res = await http.post('/action-requests/batch-resolve', {
+      request_ids: requestIds,
+      action,
+      notes,
+    });
+    return res.data;
+  },
+
+
   // --- Priority 2: User Behavior Analytics & Digital Twin ---
   getUserBehaviorProfile: async (employeeId) => {
     try {
@@ -515,5 +525,100 @@ export const api = {
     } catch {
       return [];
     }
+  },
+
+  // --- ThreatVista v2.0: Core SIH High-Impact APIs ---
+  getVaultStatus: async () => {
+    try {
+      const res = await http.get('/vault/status');
+      return res.data;
+    } catch {
+      return {
+        encryption_algorithm: "AES-256-GCM",
+        key_length_bits: 256,
+        status: "ACTIVE_PROTECTED",
+        zero_knowledge: true
+      };
+    }
+  },
+
+  rotateVaultKeys: async (newPassphrase) => {
+    const res = await http.post('/vault/rotate-keys', { new_passphrase: newPassphrase });
+    return res.data;
+  },
+
+  approveActionStep: async (requestId, notes = '', approverName = 'Admin', approverRole = 'SOC Admin') => {
+    const res = await http.post(`/action-requests/${requestId}/approve-step`, {
+      notes,
+      approver_name: approverName,
+      approver_role: approverRole
+    });
+    return res.data;
+  },
+
+  getApprovalChain: async (requestId) => {
+    try {
+      const res = await http.get(`/action-requests/${requestId}/approval-chain`);
+      return res.data;
+    } catch {
+      return { required_approvals: 1, current_approvals: 0, chain: [] };
+    }
+  },
+
+  simulateRansomwareBatch: async (fileCount = 100) => {
+    const res = await http.post('/recovery/simulate-batch', { file_count: fileCount });
+    return res.data;
+  },
+
+  simulateRansomwareAttack: async () => {
+    const res = await http.post('/recovery/simulate-attack');
+    return res.data;
+  },
+
+  executeMassRollback: async () => {
+    const res = await http.post('/recovery/mass-rollback');
+    return res.data;
+  },
+
+  getRecoveryLogs: async () => {
+    try {
+      const res = await http.get('/recovery/logs');
+      return res.data || [];
+    } catch {
+      return [];
+    }
+  },
+
+  explainEmployeeRisk: async (employeeId) => {
+    try {
+      const res = await http.post('/copilot/explain-risk', null, { params: { employee_id: employeeId } });
+      return res.data;
+    } catch {
+      return null;
+    }
+  },
+
+  copilotChat: async (message, employeeId = null, context = null) => {
+    const res = await http.post('/copilot/chat', {
+      message,
+      employee_id: employeeId,
+      context
+    });
+    return res.data;
+  },
+
+  nlInvestigate: async (query) => {
+    const res = await http.post('/copilot/investigate', { query });
+    return res.data;
+  },
+
+  getUserThreatTimeline: async (employeeId) => {
+    try {
+      const res = await http.get(`/users/${employeeId}/threat-timeline`);
+      return res.data || { timeline: [] };
+    } catch {
+      return { timeline: [] };
+    }
   }
 };
+

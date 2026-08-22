@@ -9,11 +9,17 @@ import {
   Clock,
   ChevronDown,
   ChevronRight,
-  RefreshCw
+  RefreshCw,
+  Bot,
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
 import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
 import { formatIST } from '../utils/time';
+import ThreatCopilotDrawer from '../components/ThreatCopilotDrawer';
+import MassRecoveryModal from '../components/MassRecoveryModal';
+
 
 const RESOLVE_REASONS = ['False Positive', 'Threat Removed', 'Manual Override'];
 
@@ -69,6 +75,9 @@ export default function Incidents() {
   const [busyId, setBusyId] = useState(null);
   const [actionError, setActionError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showCopilotDrawer, setShowCopilotDrawer] = useState(false);
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [selectedEmpForCopilot, setSelectedEmpForCopilot] = useState(null);
 
   // Role gates: investigate/resolve = admin+analyst; archive + reset-risk = admin.
   const role = (() => {
@@ -120,13 +129,29 @@ export default function Incidents() {
     }
   };
 
-  const filteredIncidents = incidents.filter(inc => {
-    const matchesStatus = statusFilter === 'All' || inc.status === statusFilter;
-    const matchesSeverity = severityFilter === 'All' || inc.severity === severityFilter;
+  const handleResolve = (incidentId) => {
+    runAction(incidentId, () => api.resolveIncident(incidentId, reason));
+  };
+
+  const handleArchive = (incidentId) => {
+    runAction(incidentId, () => api.archiveIncident(incidentId));
+  };
+
+  const handleResetRisk = (incidentId) => {
+    runAction(incidentId, () => api.resetIncidentRisk(incidentId));
+  };
+
+  const filteredIncidents = incidents.filter((inc) => {
+    const matchesStatus =
+      statusFilter === 'All' ? true : inc.status === statusFilter;
+    const matchesSeverity =
+      severityFilter === 'All' ? true : inc.severity === severityFilter;
     const matchesSearch =
-      !searchTerm ||
-      (inc.employee?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (inc.title || '').toLowerCase().includes(searchTerm.toLowerCase());
+      searchTerm === ''
+        ? true
+        : (inc.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (inc.employee?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (inc.employee?.department || '').toLowerCase().includes(searchTerm.toLowerCase());
     return matchesStatus && matchesSeverity && matchesSearch;
   });
 
@@ -143,19 +168,56 @@ export default function Incidents() {
 
   return (
     <div className="space-y-8 animate-fade-in">
-      <div className="flex justify-between items-center">
+      {/* Mass Rollback Demo Modal */}
+      <MassRecoveryModal
+        isOpen={showRecoveryModal}
+        onClose={() => setShowRecoveryModal(false)}
+      />
+
+      {/* ThreatVista AI Copilot Drawer */}
+      <ThreatCopilotDrawer
+        isOpen={showCopilotDrawer}
+        onClose={() => setShowCopilotDrawer(false)}
+        selectedEmployee={selectedEmpForCopilot}
+      />
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Incident Management</h2>
           <p className="text-xs text-cyber-muted font-mono mt-1 uppercase tracking-wider">
             PERSISTENT INCIDENTS · MONOTONIC RISK · FULL TIMELINE
           </p>
         </div>
-        <button
-          onClick={loadIncidents}
-          className="flex items-center gap-2 px-3 py-2 bg-cyber-card border border-cyber-border rounded-lg text-xs font-mono text-cyber-text hover:text-cyber-primary transition-colors focus:outline-none"
-        >
-          <RefreshCw className="h-4 w-4" /> REFRESH LEDGER
-        </button>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setShowRecoveryModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-cyber-primary/20 text-cyber-primary border border-cyber-primary/50 hover:bg-cyber-primary/30 rounded-lg text-xs font-mono font-bold transition-all shadow-cyber"
+            title="Open Ransomware Mass Rollback Demo"
+          >
+            <RotateCcw className="h-4 w-4" />
+            <span>MASS ROLLBACK DEMO</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setSelectedEmpForCopilot(null);
+              setShowCopilotDrawer(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-cyber-accent/20 text-cyber-accent border border-cyber-accent/50 hover:bg-cyber-accent/30 rounded-lg text-xs font-mono font-bold transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+            title="Ask ThreatVista AI Copilot"
+          >
+            <Bot className="h-4 w-4 animate-pulse" />
+            <span>AI COPILOT</span>
+          </button>
+
+          <button
+            onClick={loadIncidents}
+            className="flex items-center gap-2 px-3 py-2 bg-cyber-card border border-cyber-border rounded-lg text-xs font-mono text-cyber-text hover:text-cyber-primary transition-colors focus:outline-none"
+          >
+            <RefreshCw className="h-4 w-4" /> REFRESH LEDGER
+          </button>
+        </div>
       </div>
 
       {actionError && (

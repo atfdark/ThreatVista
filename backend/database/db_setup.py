@@ -63,7 +63,44 @@ def ensure_employee_role_column(db):
     except Exception as e:
         print(f"[!] Warning in ensure_employee_role_column: {e}")
 
+
+def ensure_action_requests_columns(db):
+
+    """Ensure multi-level approval and AI classification columns exist on action_requests table in SQLite."""
+    try:
+        from sqlalchemy import text
+        res = db.execute(text("PRAGMA table_info(action_requests)")).fetchall()
+        col_names = [r[1] for r in res]
+        if not col_names:
+            return
+
+        migrations = [
+            ("required_approvals", "INTEGER DEFAULT 1"),
+            ("current_approvals", "INTEGER DEFAULT 0"),
+            ("approval_chain_json", "TEXT DEFAULT '[]'"),
+            ("policy_tier", "VARCHAR DEFAULT 'STANDARD'"),
+            ("file_classification", "VARCHAR DEFAULT 'INTERNAL'"),
+            ("classification_confidence", "FLOAT DEFAULT 0.85"),
+            ("classification_reason", "VARCHAR"),
+            ("calculated_risk_score", "INTEGER DEFAULT 0"),
+            ("calculated_risk_level", "VARCHAR DEFAULT 'LOW'"),
+            ("risk_explanation_json", "TEXT DEFAULT '[]'"),
+        ]
+
+        for col, col_def in migrations:
+            if col not in col_names:
+                try:
+                    db.execute(text(f"ALTER TABLE action_requests ADD COLUMN {col} {col_def}"))
+                    db.commit()
+                    print(f"[+] Added '{col}' column to action_requests table.")
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[!] Warning in ensure_action_requests_columns: {e}")
+
+
 def ensure_sensitive_keywords(db):
+
     """Ensure default company-sensitive keywords exist in database."""
     from backend.models.database import SensitiveKeyword
     from ai.sensitive_scanner import DEFAULT_SENSITIVE_KEYWORDS
@@ -96,11 +133,13 @@ def init_db():
         # Idempotency: always ensure config, role_type column, sensitive keywords, valid admin hash, and demo roles exist.
         ensure_system_config(db)
         ensure_employee_role_column(db)
+        ensure_action_requests_columns(db)
         ensure_sensitive_keywords(db)
         ensure_admin(db)
         ensure_admin_hash(db)
         ensure_analyst(db)
         ensure_auditor(db)
+
 
         # The SeedState marker stops an empty seed from being re-populated with
         # demo data on a later init_db() call.

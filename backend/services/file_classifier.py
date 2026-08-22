@@ -174,9 +174,24 @@ def classify_file(file_path: str, filename: Optional[str] = None) -> Dict:
             "reason": f"Standard internal corporate document format ('{ext}')"
         }
 
+    # 5. Content-Level Inspection Fallback (if file exists locally)
+    if os.path.isfile(path_str) and ext in {".txt", ".py", ".json", ".csv", ".md", ".sql", ".env", ".yaml", ".yml", ".xml"}:
+        try:
+            from backend.services.llm_classifier import classify_document_file
+            deep_res = classify_document_file(path_str)
+            if deep_res.get("classification") in {RESTRICTED, CONFIDENTIAL}:
+                return {
+                    "classification": deep_res["classification"],
+                    "confidence": deep_res["confidence"],
+                    "reason": f"Content-level inspection: {deep_res['explanation']}"
+                }
+        except Exception:
+            pass
+
     # Default fallback
     return {
         "classification": INTERNAL,
         "confidence": 0.75,
         "reason": "Classified as general internal corporate document by default baseline"
     }
+

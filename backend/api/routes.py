@@ -2227,6 +2227,13 @@ class ActionRequestResolve(BaseModel):
     reason: Optional[str] = None
 
 
+class ActionRequestBatchResolve(BaseModel):
+    request_ids: List[int]
+    action: str  # "approve" | "reject"
+    notes: Optional[str] = None
+
+
+
 @router.post("/action-requests")
 def create_action_request_endpoint(
     payload: ActionRequestCreate,
@@ -2309,6 +2316,50 @@ def reject_action_request_endpoint(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/action-requests/batch-resolve")
+def batch_resolve_action_requests_endpoint(
+    payload: ActionRequestBatchResolve,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_roles("admin", "analyst")),
+):
+    """Batch approve or reject multiple action requests in one atomic operation."""
+    admin_name = current_user.username if current_user else "Admin"
+    results = []
+    success_count = 0
+    failure_count = 0
+
+    for req_id in payload.request_ids:
+        try:
+            if payload.action.lower() == "approve":
+                res = action_request_service.approve_action_request(
+                    db=db,
+                    request_id=req_id,
+                    admin_name=admin_name,
+                    notes=payload.notes or "Batch approved by Administrator",
+                )
+            else:
+                res = action_request_service.reject_action_request(
+                    db=db,
+                    request_id=req_id,
+                    admin_name=admin_name,
+                    reason=payload.notes or "Batch denied: security policy violation",
+                )
+            results.append({"id": req_id, "status": "SUCCESS", "result": res})
+            success_count += 1
+        except Exception as e:
+            results.append({"id": req_id, "status": "FAILED", "error": str(e)})
+            failure_count += 1
+
+    return {
+        "action": payload.action,
+        "total": len(payload.request_ids),
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "results": results,
+    }
+
+
+
 # --- Priority 2: User Behavior Analytics & Digital Twin Endpoints ------------
 @router.get("/users/{user_id}/behavior-profile")
 def get_user_behavior_profile_endpoint(
@@ -2384,7 +2435,7 @@ def get_user_risk_history_endpoint(
     scores = (
         db.query(models.RiskScore)
         .filter(models.RiskScore.employee_id == user_id)
-        .order_by(models.RiskScore.timestamp.desc())
+        .order_by(models.RiskScore.recorded_at.desc())
         .limit(30)
         .all()
     )
@@ -2392,10 +2443,279 @@ def get_user_risk_history_endpoint(
         {
             "id": s.id,
             "score": s.score,
-            "reason": s.reason,
-            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+            "timestamp": s.recorded_at.isoformat() if s.recorded_at else None,
         }
         for s in scores
     ]
+
+
+# ===========================================================================
+# ThreatVista v2.0: Core SIH High-Impact APIs
+# ===========================================================================
+
+# 1. AES-256 Shadow Vault & Key Management
+# ---------------------------------------------------------------------------
+@router.get("/vault/status")
+def get_vault_status_endpoint():
+    """Retrieve cryptographic status and AES-256-GCM verification for Shadow Vault."""
+    from backend.services.vault_encryption import default_encryption_engine
+    return default_encryption_engine.get_vault_security_info()
+
+
+class KeyRotationRequest(BaseModel):
+    new_passphrase: str
+
+
+@router.post("/vault/rotate-keys")
+def rotate_vault_keys_endpoint(
+    payload: KeyRotationRequest,
+    current_user: models.User = Depends(require_roles("admin")),
+):
+    """Re-encrypt all shadow vault copies under a new zero-knowledge master key."""
+    from backend.services.vault_encryption import default_encryption_engine
+    vault_dir = os.path.join(os.path.expanduser("~"), ".threatvista_vault")
+    return default_encryption_engine.rotate_vault_keys(payload.new_passphrase, vault_dir)
+
+
+# 2. Multi-Level Approval Step Endpoint
+# ---------------------------------------------------------------------------
+class ApprovalStepRequest(BaseModel):
+    notes: Optional[str] = None
+    approver_name: Optional[str] = "Admin"
+    approver_role: Optional[str] = "SOC Admin"
+
+
+@router.post("/action-requests/{request_id}/approve-step")
+def approve_action_step_endpoint(
+    request_id: int,
+    payload: ApprovalStepRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Advance an action request along its multi-tier approval chain towards quorum."""
+    from backend.services.approval_chain_service import process_approval_step
+    approver = current_user.username if current_user else (payload.approver_name or "Admin")
+    role = current_user.role if current_user else (payload.approver_role or "SOC Admin")
+    try:
+        return process_approval_step(
+            db=db,
+            request_id=request_id,
+            approver_name=approver,
+            approver_role=role,
+            notes=payload.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/action-requests/{request_id}/approval-chain")
+def get_approval_chain_endpoint(
+    request_id: int,
+    db: Session = Depends(get_db),
+):
+    """Retrieve multi-level approval history and quorum progress for a ticket."""
+    req = db.query(models.ActionRequest).filter(models.ActionRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Action request not found")
+    from backend.services.approval_chain_service import get_approval_chain
+    return {
+        "request_id": req.id,
+        "policy_tier": req.policy_tier or "STANDARD",
+        "required_approvals": req.required_approvals or 1,
+        "current_approvals": req.current_approvals or 0,
+        "status": req.status,
+        "chain": get_approval_chain(req),
+    }
+
+
+# 3. Ransomware Mass Rollback & Simulation Demo
+# ---------------------------------------------------------------------------
+class SimBatchRequest(BaseModel):
+    file_count: Optional[int] = 100
+
+
+@router.post("/recovery/simulate-batch")
+def simulate_batch_endpoint(payload: SimBatchRequest):
+    """Generate uncorrupted dataset and back up to AES-256 encrypted Shadow Vault."""
+    from backend.services.mass_recovery_service import mass_recovery_engine
+    return mass_recovery_engine.generate_simulation_batch(payload.file_count or 100)
+
+
+@router.post("/recovery/simulate-attack")
+def simulate_attack_endpoint():
+    """Simulate rapid malware attack by encrypting target files with .locked extension."""
+    from backend.services.mass_recovery_service import mass_recovery_engine
+    return mass_recovery_engine.simulate_ransomware_attack()
+
+
+@router.post("/recovery/mass-rollback")
+def execute_mass_rollback_endpoint(db: Session = Depends(get_db)):
+    """Execute 1-Click Mass Rollback restoring all corrupted files from AES-256 Vault."""
+    from backend.services.mass_recovery_service import mass_recovery_engine
+    return mass_recovery_engine.execute_mass_rollback(db)
+
+
+@router.get("/recovery/logs")
+def get_recovery_logs_endpoint(db: Session = Depends(get_db)):
+    """Retrieve mass rollback history logs."""
+    logs = db.query(models.RansomwareBatchLog).order_by(models.RansomwareBatchLog.executed_at.desc()).limit(20).all()
+    return [
+        {
+            "id": l.id,
+            "batch_size": l.batch_size,
+            "recovered_count": l.recovered_count,
+            "failed_count": l.failed_count,
+            "data_volume_mb": l.data_volume_mb,
+            "recovery_time_ms": l.recovery_time_ms,
+            "status": l.status,
+            "initiated_by": l.initiated_by,
+            "executed_at": l.executed_at.isoformat() if l.executed_at else None,
+        }
+        for l in logs
+    ]
+
+
+# 4. ThreatVista AI Security Copilot & NL Investigation
+# ---------------------------------------------------------------------------
+class CopilotChatRequest(BaseModel):
+    message: str
+    employee_id: Optional[int] = None
+    context: Optional[dict] = None
+
+
+@router.post("/copilot/explain-risk")
+def explain_risk_endpoint(
+    employee_id: int = Query(..., description="ID of employee to explain"),
+    db: Session = Depends(get_db),
+):
+    """Generate explainable AI risk breakdown and MITRE ATT&CK mapping for an employee."""
+    from backend.services.threat_copilot import explain_employee_risk
+    return explain_employee_risk(db, employee_id)
+
+
+@router.post("/copilot/chat")
+def copilot_chat_endpoint(
+    payload: CopilotChatRequest,
+    db: Session = Depends(get_db),
+):
+    """Conversational security copilot for SOC analysts."""
+    from backend.services.threat_copilot import copilot_chat
+    return copilot_chat(db, payload.message, payload.employee_id, payload.context)
+
+
+class NLInvestigateRequest(BaseModel):
+    query: str
+
+
+@router.post("/copilot/investigate")
+def nl_investigate_endpoint(
+    payload: NLInvestigateRequest,
+    db: Session = Depends(get_db),
+):
+    """Translate natural language questions into structured database searches."""
+    from backend.services.nl_query_service import execute_natural_language_investigation
+    return execute_natural_language_investigation(db, payload.query)
+
+
+class DocumentClassifyRequest(BaseModel):
+    content: str
+    filename: Optional[str] = "document.txt"
+
+
+@router.post("/ai/classify-document")
+def classify_document_endpoint(payload: DocumentClassifyRequest):
+    """Deep document inspection for PII, credentials, financial records, and legal markings."""
+    from backend.services.llm_classifier import inspect_document_content
+    return inspect_document_content(payload.content, payload.filename)
+
+
+# 5. Threat Timeline Visualization Data
+# ---------------------------------------------------------------------------
+@router.get("/users/{user_id}/threat-timeline")
+def get_user_threat_timeline_endpoint(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """Generate unified chronological timeline of telemetry, vault restorations, approvals, and alerts."""
+    emp = db.query(models.Employee).filter(models.Employee.id == user_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    timeline_items = []
+
+    # Telemetry events
+    events = db.query(models.Event).filter(models.Event.employee_id == user_id).order_by(models.Event.timestamp.desc()).limit(40).all()
+    for ev in events:
+        category = "FILE"
+        severity = "LOW"
+        title = f"{ev.event_type.replace('_', ' ').title()}"
+        icon = "file"
+        
+        if "usb" in (ev.event_type or "").lower() or ev.usb_status == "inserted":
+            category = "USB"
+            severity = "HIGH"
+            icon = "usb"
+            title = "External USB Device Inserted"
+        elif "delete" in (ev.event_type or "").lower():
+            category = "VAULT"
+            severity = "HIGH"
+            icon = "shield"
+            title = f"File Deletion Intercepted & Restored: {ev.filename or 'Protected File'}"
+        elif "login" in (ev.event_type or "").lower():
+            category = "AUTH"
+            severity = "LOW"
+            icon = "key"
+            title = "User Authenticated to Workstation"
+
+        timeline_items.append({
+            "id": f"event_{ev.id}",
+            "timestamp": ev.timestamp.isoformat() if ev.timestamp else datetime.utcnow().isoformat(),
+            "category": category,
+            "severity": severity,
+            "icon": icon,
+            "title": title,
+            "detail": ev.details or f"File: {ev.filename} ({ev.size or 'N/A'}) | Path: {ev.folder or 'Local'}",
+            "raw_type": ev.event_type,
+        })
+
+    # Action requests
+    requests = db.query(models.ActionRequest).filter(models.ActionRequest.employee_id == user_id).order_by(models.ActionRequest.requested_at.desc()).limit(20).all()
+    for req in requests:
+        timeline_items.append({
+            "id": f"req_{req.id}",
+            "timestamp": req.requested_at.isoformat() if req.requested_at else datetime.utcnow().isoformat(),
+            "category": "APPROVAL",
+            "severity": "CRITICAL" if req.calculated_risk_score >= 75 else "HIGH",
+            "icon": "alert",
+            "title": f"JIT Action Authorization Ticket #{req.id} ({req.file_classification})",
+            "detail": f"Target: {req.target_file} | Status: {req.status} | Risk: {req.calculated_risk_score}% | Quorum: {req.current_approvals or 0}/{req.required_approvals or 1}",
+            "raw_type": "jit_request",
+        })
+
+    # Alerts
+    alerts = db.query(models.Alert).filter(models.Alert.employee_id == user_id).order_by(models.Alert.timestamp.desc()).limit(20).all()
+    for al in alerts:
+        timeline_items.append({
+            "id": f"alert_{al.id}",
+            "timestamp": al.timestamp.isoformat() if al.timestamp else datetime.utcnow().isoformat(),
+            "category": "ALERT",
+            "severity": "CRITICAL" if al.severity == "High" else "HIGH",
+            "icon": "shield-alert",
+            "title": f"Security Alert: {al.reason[:60]}...",
+            "detail": al.reason,
+            "raw_type": "security_alert",
+        })
+
+    # Sort all items descending by timestamp
+    timeline_items.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    return {
+        "employee_id": emp.id,
+        "employee_name": emp.name,
+        "department": emp.department,
+        "total_events": len(timeline_items),
+        "timeline": timeline_items,
+    }
+
 
 

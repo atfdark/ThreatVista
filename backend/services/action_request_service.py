@@ -4,11 +4,11 @@ ThreatVista JIT Action Authorization & Request Service.
 Handles lifecycle of intercepted endpoint actions (e.g. file deletions, USB exports):
 - Runs AI File Sensitivity Classification (RESTRICTED, CONFIDENTIAL, INTERNAL, PUBLIC).
 - Computes Explainable Dynamic Risk Scoring (0-100, LOW/MEDIUM/HIGH, and human-readable factor trail).
+- Enforces Multi-Level Approval Quorum Policies (Auto, Standard, Elevated, Dual Quorum).
 - Enforces 5-minute request TTL with automatic expiration.
 - Endpoint agent submits PENDING ActionRequest.
 - Service stores ticket in database and broadcasts real-time WebSocket event to all Admins.
-- Admin approves -> Ticket marked APPROVED, execution command dispatched to endpoint agent.
-- Admin rejects -> Ticket marked REJECTED, security alert logged, risk penalty applied.
+- Multi-tier approvals track each authorization step until quorum is satisfied before releasing action.
 """
 import json
 from datetime import datetime, timedelta
@@ -19,6 +19,12 @@ from backend.models.database import ActionRequest, Employee, Alert
 from backend.websocket.manager import manager
 from backend.services.file_classifier import classify_file
 from backend.services.jit_risk_engine import calculate_risk_score
+from backend.services.approval_chain_service import (
+    determine_approval_policy,
+    get_approval_chain,
+    process_approval_step,
+    reject_approval_step,
+)
 
 EXPIRY_MINUTES = 5
 
@@ -35,10 +41,13 @@ def action_request_to_dict(req: ActionRequest) -> Dict:
         except Exception:
             explanation = [req.risk_explanation_json]
 
+    # Parse approval chain JSON safely
+    chain = get_approval_chain(req)
+
     # Check expiration dynamically
     now = datetime.utcnow()
     is_expired = False
-    if req.status == "PENDING" and req.expires_at and now > req.expires_at:
+    if req.status in {"PENDING", "PARTIALLY_APPROVED"} and req.expires_at and now > req.expires_at:
         is_expired = True
 
     return {
@@ -57,17 +66,23 @@ def action_request_to_dict(req: ActionRequest) -> Dict:
         "status": "EXPIRED" if is_expired else req.status,
         "risk_context": req.risk_context,
         
-        # Priority 1: AI File Sensitivity Classification
+        # AI File Sensitivity Classification
         "file_classification": req.file_classification or "INTERNAL",
         "classification_confidence": round(req.classification_confidence or 0.85, 2),
         "classification_reason": req.classification_reason or "Automated classification",
         
-        # Priority 1: Explainable Risk Scoring Engine
+        # Explainable Risk Scoring Engine
         "calculated_risk_score": req.calculated_risk_score or 0,
         "calculated_risk_level": req.calculated_risk_level or "LOW",
         "risk_explanation": explanation,
+
+        # Multi-Level Approval Workflow
+        "required_approvals": req.required_approvals if req.required_approvals is not None else 1,
+        "current_approvals": req.current_approvals or 0,
+        "approval_chain": chain,
+        "policy_tier": req.policy_tier or "STANDARD",
         
-        # Priority 1: Automatic Request Expiration
+        # Automatic Request Expiration
         "requested_at": req.requested_at.isoformat() if req.requested_at else None,
         "expires_at": req.expires_at.isoformat() if req.expires_at else None,
         "is_expired": is_expired,
@@ -87,7 +102,7 @@ def create_action_request(
     file_size: Optional[str] = None,
     risk_context: Optional[str] = None,
 ) -> Dict:
-    """Record an intercepted action, classify file sensitivity, compute explainable risk, and alert SOC."""
+    """Record an intercepted action, classify file sensitivity, compute explainable risk, evaluate approval policy, and alert SOC."""
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise ValueError(f"Employee {employee_id} not found")
@@ -101,7 +116,7 @@ def create_action_request(
         .filter(
             ActionRequest.employee_id == employee_id,
             ActionRequest.action_type == action_type,
-            ActionRequest.status == "PENDING",
+            ActionRequest.status.in_(["PENDING", "PARTIALLY_APPROVED"]),
             (ActionRequest.expires_at == None) | (ActionRequest.expires_at > now),
             (ActionRequest.file_path == file_path) | (ActionRequest.target_file == target_file),
         )
@@ -134,12 +149,23 @@ def create_action_request(
     risk_level = risk_res.get("risk_level", "LOW")
     explanation_list = risk_res.get("explanation", [])
 
+    # 3. Multi-Level Approval Policy Engine
+    policy_res = determine_approval_policy(classification=classification, risk_score=risk_score)
+    req_approvals = policy_res.get("required_approvals", 1)
+    policy_tier = policy_res.get("policy_tier", "STANDARD")
+
     # If risk context not provided, generate smart summary based on classification and action
     if not risk_context:
         risk_context = (
             f"Intercepted {action_type.replace('_', ' ').upper()} on {classification} file '{target_file}' "
-            f"by {emp.name} ({emp.role_type}). Risk Score: {risk_score}% ({risk_level})."
+            f"by {emp.name} ({emp.role_type}). Risk Score: {risk_score}% ({risk_level}). Policy: {policy_tier}."
         )
+
+    # If 0 approvals required (e.g. PUBLIC asset), auto-approve immediately
+    initial_status = "APPROVED" if req_approvals == 0 else "PENDING"
+    resolved_time = now if req_approvals == 0 else None
+    resolved_user = "SYSTEM_AUTO_APPROVER" if req_approvals == 0 else None
+    res_notes = "Auto-approved: Zero-risk public asset policy" if req_approvals == 0 else None
 
     req = ActionRequest(
         employee_id=employee_id,
@@ -148,7 +174,7 @@ def create_action_request(
         target_file=target_file,
         file_path=file_path,
         file_size=file_size,
-        status="PENDING",
+        status=initial_status,
         risk_context=risk_context,
         file_classification=classification,
         classification_confidence=confidence,
@@ -156,8 +182,15 @@ def create_action_request(
         calculated_risk_score=risk_score,
         calculated_risk_level=risk_level,
         risk_explanation_json=json.dumps(explanation_list),
+        required_approvals=req_approvals,
+        current_approvals=0 if req_approvals > 0 else 0,
+        approval_chain_json="[]",
+        policy_tier=policy_tier,
         requested_at=now,
         expires_at=expires_at,
+        resolved_at=resolved_time,
+        resolved_by=resolved_user,
+        resolution_notes=res_notes,
     )
     db.add(req)
     db.commit()
@@ -184,21 +217,21 @@ def list_action_requests(
     """Retrieve action approval tickets with optional status filtering."""
     query = db.query(ActionRequest)
     if status:
-        if status.upper() == "PENDING":
+        status_norm = status.upper()
+        if status_norm in {"PENDING", "PARTIALLY_APPROVED"}:
             now = datetime.utcnow()
-            # Only genuinely pending (not expired)
             query = query.filter(
-                ActionRequest.status == "PENDING",
+                ActionRequest.status.in_(["PENDING", "PARTIALLY_APPROVED"]),
                 (ActionRequest.expires_at == None) | (ActionRequest.expires_at > now),
             )
-        elif status.upper() == "EXPIRED":
+        elif status_norm == "EXPIRED":
             now = datetime.utcnow()
             query = query.filter(
                 (ActionRequest.status == "EXPIRED") |
-                ((ActionRequest.status == "PENDING") & (ActionRequest.expires_at <= now))
+                (ActionRequest.status.in_(["PENDING", "PARTIALLY_APPROVED"]) & (ActionRequest.expires_at <= now))
             )
         else:
-            query = query.filter(ActionRequest.status == status.upper())
+            query = query.filter(ActionRequest.status == status_norm)
 
     if employee_id:
         query = query.filter(ActionRequest.employee_id == employee_id)
@@ -211,7 +244,7 @@ def get_pending_count(db: Session) -> int:
     """Return total number of active pending action requests (excluding expired)."""
     now = datetime.utcnow()
     return db.query(ActionRequest).filter(
-        ActionRequest.status == "PENDING",
+        ActionRequest.status.in_(["PENDING", "PARTIALLY_APPROVED"]),
         (ActionRequest.expires_at == None) | (ActionRequest.expires_at > now),
     ).count()
 
@@ -221,54 +254,16 @@ def approve_action_request(
     request_id: int,
     admin_name: str = "Admin",
     notes: Optional[str] = None,
+    admin_role: str = "SOC Admin",
 ) -> Dict:
-    """Approve the pending action and dispatch execute command to endpoint agent."""
-    req = db.query(ActionRequest).filter(ActionRequest.id == request_id).first()
-    if not req:
-        raise ValueError(f"Action request #{request_id} not found")
-
-    now = datetime.utcnow()
-    if req.status == "EXPIRED" or (req.status == "PENDING" and req.expires_at and now > req.expires_at):
-        req.status = "EXPIRED"
-        db.commit()
-        raise ValueError(f"Action request #{request_id} has expired (5-minute TTL exceeded)")
-
-    if req.status != "PENDING":
-        raise ValueError(f"Action request #{request_id} is already {req.status}")
-
-    req.status = "APPROVED"
-    req.resolved_at = now
-    req.resolved_by = admin_name
-    req.resolution_notes = notes or "Action approved by Security Administrator"
-
-    # Batch-resolve any sibling pending duplicates for the same employee & file
-    duplicates = db.query(ActionRequest).filter(
-        ActionRequest.employee_id == req.employee_id,
-        ActionRequest.target_file == req.target_file,
-        ActionRequest.action_type == req.action_type,
-        ActionRequest.status == "PENDING",
-        ActionRequest.id != req.id,
-    ).all()
-    for dup in duplicates:
-        dup.status = "APPROVED"
-        dup.resolved_at = now
-        dup.resolved_by = admin_name
-        dup.resolution_notes = f"Batch-approved with ticket #{req.id}"
-
-    db.commit()
-    db.refresh(req)
-
-    data = action_request_to_dict(req)
-
-    # Broadcast resolution to dashboards and endpoint agents
-    manager.broadcast_nowait({
-        "type": "action_request_resolved",
-        "action_request": data,
-        "command": "EXECUTE_ACTION",
-        "pending_count": get_pending_count(db),
-    })
-
-    return data
+    """Approve or advance the approval step for an action request."""
+    return process_approval_step(
+        db=db,
+        request_id=request_id,
+        approver_name=admin_name,
+        approver_role=admin_role,
+        notes=notes,
+    )
 
 
 def reject_action_request(
@@ -276,71 +271,13 @@ def reject_action_request(
     request_id: int,
     admin_name: str = "Admin",
     reason: Optional[str] = None,
+    admin_role: str = "SOC Admin",
 ) -> Dict:
-    """Reject the action request, maintain protection, and log security alert."""
-    req = db.query(ActionRequest).filter(ActionRequest.id == request_id).first()
-    if not req:
-        raise ValueError(f"Action request #{request_id} not found")
-
-    now = datetime.utcnow()
-    if req.status == "EXPIRED" or (req.status == "PENDING" and req.expires_at and now > req.expires_at):
-        req.status = "EXPIRED"
-        db.commit()
-        raise ValueError(f"Action request #{request_id} has expired (5-minute TTL exceeded)")
-
-    if req.status != "PENDING":
-        raise ValueError(f"Action request #{request_id} is already {req.status}")
-
-    req.status = "REJECTED"
-    req.resolved_at = now
-    req.resolved_by = admin_name
-    req.resolution_notes = reason or "Action denied: security policy violation"
-
-    # Batch-resolve any sibling pending duplicates for the same employee & file
-    duplicates = db.query(ActionRequest).filter(
-        ActionRequest.employee_id == req.employee_id,
-        ActionRequest.target_file == req.target_file,
-        ActionRequest.action_type == req.action_type,
-        ActionRequest.status == "PENDING",
-        ActionRequest.id != req.id,
-    ).all()
-    for dup in duplicates:
-        dup.status = "REJECTED"
-        dup.resolved_at = now
-        dup.resolved_by = admin_name
-        dup.resolution_notes = f"Batch-rejected with ticket #{req.id}"
-
-    # Create security alert for employee
-    alert = Alert(
-        employee_id=req.employee_id,
-        severity="High",
-        reason=f"Unauthorized {req.action_type.replace('_', ' ')} on {req.file_classification} '{req.target_file}' was BLOCKED by Admin ({admin_name}).",
-        status="Active",
-        timestamp=now,
+    """Reject an action request, maintaining block and logging alert."""
+    return reject_approval_step(
+        db=db,
+        request_id=request_id,
+        rejecter_name=admin_name,
+        rejecter_role=admin_role,
+        reason=reason,
     )
-    db.add(alert)
-
-    # Elevate employee risk score slightly due to rejected violation (+10)
-    emp = req.employee
-    if emp:
-        emp.risk_score = min(100, (emp.risk_score or 0) + 10)
-        if emp.risk_score >= 75:
-            emp.status = "High Risk"
-        elif emp.risk_score >= 50:
-            emp.status = "Suspicious"
-
-    db.commit()
-    db.refresh(req)
-
-    data = action_request_to_dict(req)
-
-    # Broadcast resolution
-    manager.broadcast_nowait({
-        "type": "action_request_resolved",
-        "action_request": data,
-        "command": "MAINTAIN_BLOCK",
-        "pending_count": get_pending_count(db),
-    })
-
-    return data
-

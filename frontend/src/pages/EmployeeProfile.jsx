@@ -39,6 +39,10 @@ import { api } from '../services/mockData';
 import { useWebSocket } from '../services/websocket';
 import { formatIST, toISTDate } from '../utils/time';
 import IncidentCard from '../components/IncidentCard';
+import ThreatTimeline from '../components/ThreatTimeline';
+import ThreatCopilotDrawer from '../components/ThreatCopilotDrawer';
+
+
 
 const SUPPORTED_ROLES = [
   'Developer', 
@@ -171,15 +175,23 @@ export default function EmployeeProfile() {
     return `${Math.floor(diff / 3600)}h ago`;
   };
 
+  // ThreatVista v2.0: Threat Timeline & Copilot states
+  const [timelineItems, setTimelineItems] = useState([]);
+  const [showCopilotDrawer, setShowCopilotDrawer] = useState(false);
+
   // Load appropriate data
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       if (id) {
-        const detail = await api.getEmployeeDetail(parseInt(id));
+        const [detail, tlData] = await Promise.all([
+          api.getEmployeeDetail(parseInt(id)),
+          api.getUserThreatTimeline(parseInt(id))
+        ]);
         setEmployee(detail);
         setAiAnalysis(detail.ai_analysis || null);
         setCommands(detail.commands || []);
+        setTimelineItems(tlData.timeline || []);
       } else {
         const list = await api.getEmployees();
         setEmployees(list);
@@ -194,6 +206,7 @@ export default function EmployeeProfile() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
 
   // Live WebSocket updates
   const reloadDebounceRef = useRef(null);
@@ -534,27 +547,39 @@ export default function EmployeeProfile() {
                 </span>
               </div>
             </div>
-            {isAdmin && (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleResetRisk}
-                  disabled={resetRiskBusy}
-                  title="Force risk to 0% / Safe and resolve active incident (Manual Override)"
-                  className="px-3 py-2 bg-cyber-warning/10 hover:bg-cyber-warning text-cyber-warning hover:text-cyber-bg rounded border border-cyber-warning/30 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
-                >
-                  {resetRiskBusy ? 'RESETTING…' : 'RESET RISK TO 0'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteTarget(employee)}
-                  title="Permanently remove employee and clear all data/credentials for demo reuse"
-                  className="px-3 py-2 bg-cyber-danger/15 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg rounded border border-cyber-danger/40 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1.5"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> REMOVE EMPLOYEE
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setShowCopilotDrawer(true)}
+                className="px-3.5 py-2 bg-cyber-accent/20 hover:bg-cyber-accent/30 text-cyber-accent rounded border border-cyber-accent/50 text-[10px] font-mono font-bold uppercase tracking-wide transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)] cursor-pointer flex items-center gap-1.5"
+                title="Explain risk factors and generate containment playbook with ThreatVista AI Copilot"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-cyber-accent animate-pulse" /> ASK COPILOT
+              </button>
+
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleResetRisk}
+                    disabled={resetRiskBusy}
+                    title="Force risk to 0% / Safe and resolve active incident (Manual Override)"
+                    className="px-3 py-2 bg-cyber-warning/10 hover:bg-cyber-warning text-cyber-warning hover:text-cyber-bg rounded border border-cyber-warning/30 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    {resetRiskBusy ? 'RESETTING…' : 'RESET RISK TO 0'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(employee)}
+                    title="Permanently remove employee and clear all data/credentials for demo reuse"
+                    className="px-3 py-2 bg-cyber-danger/15 hover:bg-cyber-danger text-cyber-danger hover:text-cyber-bg rounded border border-cyber-danger/40 text-[10px] font-mono font-bold uppercase tracking-wide transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> REMOVE EMPLOYEE
+                  </button>
+                </>
+              )}
+            </div>
+
           </div>
         </div>
 
@@ -900,12 +925,16 @@ export default function EmployeeProfile() {
           </div>
         </div>
 
+        {/* ThreatVista v2.0: Threat Timeline & Attack Forensic Reconstruction */}
+        <ThreatTimeline items={timelineItems} employeeName={employee.name} />
+
         {/* Activity Logs & Telemetry Events */}
         <div className="p-6 glass-panel border border-cyber-border/80 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-cyber-border/50 pb-4">
             <h3 className="text-sm font-bold uppercase font-mono text-cyber-text flex items-center gap-2">
               <Activity className="h-4 w-4 text-cyber-primary" /> Telemetry & Activity Stream
             </h3>
+
             {/* Filter Tabs */}
             <div className="flex flex-wrap gap-1.5">
               {[
@@ -1265,6 +1294,15 @@ export default function EmployeeProfile() {
           </div>
         </div>
       )}
+
+      {/* ThreatVista AI Copilot Drawer */}
+      <ThreatCopilotDrawer
+        isOpen={showCopilotDrawer}
+        onClose={() => setShowCopilotDrawer(false)}
+        selectedEmployee={employee}
+      />
     </div>
   );
 }
+
+

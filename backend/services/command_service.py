@@ -17,6 +17,7 @@ ALLOWED_COMMANDS = {
     "restart_agent": "Restart ThreatVista agent service",
     "collect_logs": "Collect detailed process & event logs (24h)",
     "refresh_config": "Refresh endpoint monitoring configuration",
+    "execute_approved_action": "Execute authorized JIT action on endpoint",
 }
 
 
@@ -25,8 +26,9 @@ def request_command(
     employee_id: int,
     command: str,
     requested_by: Optional[str] = None,
+    details: Optional[str] = None,
 ) -> Dict:
-    """Record a (simulated) dashboard command for an employee."""
+    """Record a dashboard command for an employee."""
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee:
         raise ValueError(f"Employee {employee_id} not found")
@@ -38,9 +40,10 @@ def request_command(
         command=command,
         status="Simulated",
         requested_by=requested_by or "dashboard",
-        details=ALLOWED_COMMANDS[command],
+        details=details or ALLOWED_COMMANDS[command],
         completed_at=datetime.utcnow(),  # simulated = already "completed"
     )
+
     db.add(cmd)
     db.commit()
     db.refresh(cmd)

@@ -9,7 +9,11 @@ import {
   ArrowRight,
   Radio,
   Clock,
-  CheckCircle2
+  CheckCircle2,
+  Bot,
+  RotateCcw,
+  Lock,
+  Sparkles
 } from 'lucide-react';
 import { ResponsiveContainer, XAxis, YAxis, Tooltip, BarChart, Bar, CartesianGrid } from 'recharts';
 import { api } from '../services/mockData';
@@ -17,6 +21,9 @@ import { useWebSocket } from '../services/websocket';
 import { formatIST, formatISTClock, toISTDate } from '../utils/time';
 import IncidentCard from '../components/IncidentCard';
 import ActionApprovalModal from '../components/ActionApprovalModal';
+import MassRecoveryModal from '../components/MassRecoveryModal';
+import ThreatCopilotDrawer from '../components/ThreatCopilotDrawer';
+
 
 const LIVE_WINDOW_MINUTES = 15;
 
@@ -59,6 +66,8 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState([]);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [showCopilotDrawer, setShowCopilotDrawer] = useState(false);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   // Forces the live chart's sliding window to advance even during quiet periods.
@@ -67,6 +76,7 @@ export default function Dashboard() {
   const fetchPending = () => {
     api.getActionRequests('PENDING').then(setPendingApprovals).catch(() => {});
   };
+
 
   const { isConnected } = useWebSocket((message) => {
     if (message.type === 'new_event') {
@@ -255,43 +265,64 @@ export default function Dashboard() {
         onActionResolved={fetchPending}
       />
 
-      <div className="flex items-center justify-between">
+      {/* Ransomware Mass Rollback Simulation Modal */}
+      <MassRecoveryModal
+        isOpen={showRecoveryModal}
+        onClose={() => setShowRecoveryModal(false)}
+      />
+
+      {/* ThreatVista AI Copilot Drawer */}
+      <ThreatCopilotDrawer
+        isOpen={showCopilotDrawer}
+        onClose={() => setShowCopilotDrawer(false)}
+      />
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Security Command Center</h2>
           <p className="text-xs text-cyber-muted font-mono mt-1 uppercase tracking-wider">LATEST SECURITY STANDINGS & ANOMALIES</p>
         </div>
-        <div className="flex items-center gap-2 bg-cyber-card border border-cyber-border px-3 py-1.5 rounded-lg text-xs font-mono">
-          <Radio className={`h-4 w-4 ${wsConnected ? 'text-cyber-success animate-pulse' : 'text-cyber-muted'}`} />
-          <span className="text-cyber-text">{wsConnected ? 'LIVE FEED ACTIVE' : 'OFFLINE MODE'}</span>
+        
+        {/* Top High-Impact Action Bar */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* AES-256 Protected Vault Badge */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyber-card border border-cyber-border text-xs font-mono">
+            <Lock className="h-3.5 w-3.5 text-cyber-primary" />
+            <span className="text-cyber-muted">Vault:</span>
+            <span className="text-cyber-primary font-bold">AES-256 Zero-Knowledge</span>
+          </div>
+
+          {/* Ransomware Rollback Demo Trigger */}
+          <button
+            onClick={() => setShowRecoveryModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyber-primary/20 text-cyber-primary border border-cyber-primary/50 hover:bg-cyber-primary/30 text-xs font-mono font-bold transition-all shadow-cyber"
+            title="Simulate 100-file ransomware attack and execute instant atomic mass rollback"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>Mass Rollback Demo</span>
+          </button>
+
+          {/* AI Copilot Drawer Trigger */}
+          <button
+            onClick={() => setShowCopilotDrawer(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyber-accent/20 text-cyber-accent border border-cyber-accent/50 hover:bg-cyber-accent/30 text-xs font-mono font-bold transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+            title="Open ThreatVista AI Security Copilot"
+          >
+            <Bot className="h-3.5 w-3.5 animate-pulse" />
+            <span>AI Copilot</span>
+          </button>
+
+          {/* Live WebSocket Indicator */}
+          <div className="flex items-center gap-2 bg-cyber-card border border-cyber-border px-3 py-1.5 rounded-lg text-xs font-mono">
+            <Radio className={`h-3.5 w-3.5 ${wsConnected ? 'text-cyber-success animate-pulse' : 'text-cyber-muted'}`} />
+            <span className="text-cyber-text">{wsConnected ? 'LIVE FEED ACTIVE' : 'OFFLINE MODE'}</span>
+          </div>
         </div>
       </div>
 
-      {/* Pending JIT Approvals Alert Banner */}
-      {pendingApprovals.length > 0 && (
-        <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-lg shadow-amber-500/5">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 shrink-0">
-              <ShieldAlert className="h-6 w-6 animate-pulse" />
-            </div>
-            <div>
-              <div className="text-xs font-mono font-bold uppercase text-amber-400">
-                {pendingApprovals.length} Action Authorization Request{pendingApprovals.length > 1 ? 's' : ''} Pending
-              </div>
-              <div className="text-xs text-cyber-text mt-0.5">
-                Endpoint interceptor prevented unauthorized file deletion. Security Admin review required before disk execution.
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={() => setShowApprovalModal(true)}
-            className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-mono font-bold transition-colors cursor-pointer shrink-0 text-center"
-          >
-            Review Authorization Queue ({pendingApprovals.length}) →
-          </button>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+
+
         {statCards.map((card, i) => {
           const Icon = card.icon;
           return (

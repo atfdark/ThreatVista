@@ -153,17 +153,20 @@ def test_end_to_end_jit_flow():
     print("\n--- TEST 4: End-to-End JIT Ticket Lifecycle Integration ---")
     db = SessionLocal()
     try:
+        import time
         emp = db.query(models.Employee).first()
-
+        t_file = f"salary_bonus_{int(time.time())}.xlsx"
         # Submit ticket for confidential payroll file
         req = create_action_request(
             db=db,
             employee_id=emp.id,
-            target_file="salary_bonus_2026.xlsx",
-            file_path="E:\\HR\\salary_bonus_2026.xlsx",
+            target_file=t_file,
+            file_path=f"E:\\HR\\{t_file}",
             action_type="file_delete",
         )
+
         req_id = req["id"]
+
 
         assert req["file_classification"] == "CONFIDENTIAL"
         assert req["calculated_risk_score"] >= 45

@@ -335,6 +335,12 @@ class ActionRequest(Base):
     resolved_by = Column(String, nullable=True)                         # Admin username
     resolution_notes = Column(String, nullable=True)
 
+    # ThreatVista v2.0: Multi-Level Approval Workflow fields
+    required_approvals = Column(Integer, default=1, nullable=False)     # 0 (Auto), 1 (Standard), 2 (Dual), 3 (Tri-Quorum)
+    current_approvals = Column(Integer, default=0, nullable=False)      # Count of valid approvals received
+    approval_chain_json = Column(Text, default="[]", nullable=False)    # JSON list of approval step records
+    policy_tier = Column(String, default="STANDARD", nullable=False)    # AUTO | STANDARD | ELEVATED | DUAL_QUORUM
+
     employee = relationship("Employee", back_populates="action_requests")
 
 
@@ -379,6 +385,37 @@ class BehavioralAnomalyLog(Base):
     detected_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     employee = relationship("Employee", back_populates="anomalies")
+
+
+class RansomwareBatchLog(Base):
+    """Audit log for Mass Ransomware Recoveries and Simulations."""
+    __tablename__ = "ransomware_batch_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_id = Column(Integer, nullable=True)
+    batch_size = Column(Integer, nullable=False, default=0)
+    recovered_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    data_volume_mb = Column(Float, default=0.0)
+    recovery_time_ms = Column(Integer, default=0)
+    status = Column(String, default="SUCCESS")  # SUCCESS | PARTIAL | FAILED
+    initiated_by = Column(String, default="System")
+    executed_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ExfiltrationPredictionLog(Base):
+    """Data Exfiltration Prediction and Threat Scoring Trail."""
+    __tablename__ = "exfiltration_prediction_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    probability = Column(Integer, nullable=False)  # 0 - 100
+    threat_level = Column(String, nullable=False)  # CRITICAL | HIGH | MEDIUM | LOW
+    vector = Column(String, default="USB Transfer")
+    time_window_hours = Column(Integer, default=24)
+    indicators_json = Column(Text, default="[]")
+    predicted_at = Column(DateTime, default=datetime.utcnow, index=True)
+
 
 
 

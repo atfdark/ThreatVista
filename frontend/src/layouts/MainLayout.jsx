@@ -196,24 +196,25 @@ export default function MainLayout() {
 
           {/* Quick Header Controls */}
           <div className="flex items-center gap-3">
-            {/* JIT Action Approvals Button */}
+            {/* JIT Action Approvals Button (Persistent Top Global Action) */}
             <button
               onClick={() => setShowApprovalModal(true)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer ${
                 pendingApprovalsCount > 0
-                  ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 animate-pulse shadow-lg shadow-amber-500/10'
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/80 text-amber-300 animate-pulse shadow-[0_0_20px_rgba(245,158,11,0.35)]'
                   : 'bg-cyber-card/80 border-cyber-border/60 text-cyber-muted hover:text-cyber-text hover:border-cyber-primary/40'
               }`}
-              title="JIT Action Approvals Queue"
+              title="JIT Action Authorization Center (Zero-Trust Interceptor)"
             >
-              <ShieldAlert className={`h-3.5 w-3.5 ${pendingApprovalsCount > 0 ? 'text-amber-400' : 'text-cyber-muted'}`} />
+              <ShieldAlert className={`h-4 w-4 ${pendingApprovalsCount > 0 ? 'text-amber-400 animate-pulse' : 'text-cyber-muted'}`} />
               <span>JIT APPROVALS</span>
               {pendingApprovalsCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black text-[10px] font-black">
-                  {pendingApprovalsCount}
+                <span className="px-2 py-0.5 rounded-full bg-amber-500 text-black text-[10.5px] font-black shadow-sm">
+                  {pendingApprovalsCount} PENDING
                 </span>
               )}
             </button>
+
 
             {/* Audio Alert Controls */}
             <div className="flex items-center gap-1.5 bg-cyber-card/80 border border-cyber-border/60 rounded-lg px-2 py-1">
