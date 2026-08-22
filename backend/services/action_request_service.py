@@ -95,6 +95,26 @@ def create_action_request(
     now = datetime.utcnow()
     expires_at = now + timedelta(minutes=EXPIRY_MINUTES)
 
+    # Deduplication check: Do not create duplicate pending requests for the same action/file
+    existing_req = (
+        db.query(ActionRequest)
+        .filter(
+            ActionRequest.employee_id == employee_id,
+            ActionRequest.action_type == action_type,
+            ActionRequest.status == "PENDING",
+            (ActionRequest.expires_at == None) | (ActionRequest.expires_at > now),
+            (ActionRequest.file_path == file_path) | (ActionRequest.target_file == target_file),
+        )
+        .first()
+    )
+
+    if existing_req:
+        if file_size and not existing_req.file_size:
+            existing_req.file_size = file_size
+            db.commit()
+            db.refresh(existing_req)
+        return action_request_to_dict(existing_req)
+
     # 1. AI File Sensitivity Classification
     cls_res = classify_file(file_path=file_path, filename=target_file)
     classification = cls_res.get("classification", "INTERNAL")
@@ -221,6 +241,20 @@ def approve_action_request(
     req.resolved_by = admin_name
     req.resolution_notes = notes or "Action approved by Security Administrator"
 
+    # Batch-resolve any sibling pending duplicates for the same employee & file
+    duplicates = db.query(ActionRequest).filter(
+        ActionRequest.employee_id == req.employee_id,
+        ActionRequest.target_file == req.target_file,
+        ActionRequest.action_type == req.action_type,
+        ActionRequest.status == "PENDING",
+        ActionRequest.id != req.id,
+    ).all()
+    for dup in duplicates:
+        dup.status = "APPROVED"
+        dup.resolved_at = now
+        dup.resolved_by = admin_name
+        dup.resolution_notes = f"Batch-approved with ticket #{req.id}"
+
     db.commit()
     db.refresh(req)
 
@@ -262,6 +296,20 @@ def reject_action_request(
     req.resolved_by = admin_name
     req.resolution_notes = reason or "Action denied: security policy violation"
 
+    # Batch-resolve any sibling pending duplicates for the same employee & file
+    duplicates = db.query(ActionRequest).filter(
+        ActionRequest.employee_id == req.employee_id,
+        ActionRequest.target_file == req.target_file,
+        ActionRequest.action_type == req.action_type,
+        ActionRequest.status == "PENDING",
+        ActionRequest.id != req.id,
+    ).all()
+    for dup in duplicates:
+        dup.status = "REJECTED"
+        dup.resolved_at = now
+        dup.resolved_by = admin_name
+        dup.resolution_notes = f"Batch-rejected with ticket #{req.id}"
+
     # Create security alert for employee
     alert = Alert(
         employee_id=req.employee_id,
@@ -295,3 +343,4 @@ def reject_action_request(
     })
 
     return data
+

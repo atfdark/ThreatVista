@@ -88,8 +88,32 @@ class ThreatFileHandler(FileSystemEventHandler):
         self.callback = callback
         self.vault = vault
         self.action_client = action_client
+        self._cooldown = {}  # key -> timestamp
+        self._lock = threading.Lock()
         # Watch specific folders on C:\ plus all other full drives
         self.monitored_paths = get_user_dirs() + get_all_drive_paths()
+
+    def _should_throttle_interception(self, path: str, filename: str, action: str = "usb_export", cooldown_secs: float = 15.0) -> bool:
+        """Check if an interception for this file/path occurred within cooldown period."""
+        now = time.time()
+        p_key = (os.path.normpath(path).lower(), action)
+        f_key = (filename.lower(), action)
+        with self._lock:
+            if p_key in self._cooldown and (now - self._cooldown[p_key] < cooldown_secs):
+                return True
+            if f_key in self._cooldown and (now - self._cooldown[f_key] < cooldown_secs):
+                return True
+            self._cooldown[p_key] = now
+            self._cooldown[f_key] = now
+            return False
+
+    def _find_source_candidate(self, filename: str) -> Optional[str]:
+        """Search local user directories (Downloads, Documents, Desktop) for original file location."""
+        for u_dir in get_user_dirs():
+            candidate = os.path.join(u_dir, filename)
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     def on_created(self, event):
         if is_path_excluded(event.src_path): return
@@ -100,8 +124,11 @@ class ThreatFileHandler(FileSystemEventHandler):
             is_approved = self.action_client and self.action_client.is_approved(event.src_path)
 
             if is_removable and not is_approved:
-                # Intercept and quarantine USB file write
                 filename = os.path.basename(event.src_path)
+                if self._should_throttle_interception(event.src_path, filename, "usb_export"):
+                    return  # Debounce duplicate chunk writes
+
+                source_path = self._find_source_candidate(filename)
                 size_str = None
                 try:
                     if os.path.exists(event.src_path):
@@ -110,9 +137,8 @@ class ThreatFileHandler(FileSystemEventHandler):
                 except Exception:
                     pass
 
-                quarantined = False
                 if self.vault:
-                    quarantined = self.vault.quarantine_file(event.src_path)
+                    self.vault.quarantine_file(event.src_path, source_path=source_path)
 
                 if self.action_client:
                     self.action_client.submit_action_request(
@@ -120,6 +146,7 @@ class ThreatFileHandler(FileSystemEventHandler):
                         file_path=event.src_path,
                         action_type="usb_export",
                         file_size=size_str,
+                        source_path=source_path,
                         risk_context=f"Unauthorized USB file transfer of '{filename}' to removable drive ({event.src_path}) intercepted and quarantined. Awaiting Admin Approval."
                     )
                 self._emit("usb_export_intercepted", event.src_path, event)
@@ -137,14 +164,23 @@ class ThreatFileHandler(FileSystemEventHandler):
             is_approved = self.action_client and self.action_client.is_approved(event.src_path)
             has_recent_usb = self.action_client and self.action_client.has_recent_usb_interception(filename)
 
-            if not is_approved and self.vault and self.vault.has_backup(event.src_path):
-                # Instant rollback from shadow vault
-                restored = self.vault.restore_file(event.src_path)
-                if restored and self.action_client:
-                    if has_recent_usb:
-                        # Cross-drive move: source file restored as safety net, ticket is already handled by usb_export
-                        print(f"[🛡️ ThreatVista Protection] Preserved source file '{filename}' during pending USB move.")
+            if not is_approved and self.vault:
+                if has_recent_usb:
+                    # Cross-drive move: restore source file immediately to avoid data loss
+                    restored = False
+                    if self.vault.has_backup(event.src_path):
+                        restored = self.vault.restore_file(event.src_path)
                     else:
+                        recent_info = self.action_client.get_recent_usb_interception(filename)
+                        if recent_info and recent_info.get("file_path"):
+                            restored = self.vault.restore_quarantined_to_source(recent_info["file_path"], event.src_path)
+
+                    if restored:
+                        print(f"[🛡️ ThreatVista Protection] Preserved local source file '{filename}' at {event.src_path} during USB transfer.")
+                elif self.vault.has_backup(event.src_path):
+                    # Unauthorized file deletion on endpoint -> restore from Shadow Vault
+                    restored = self.vault.restore_file(event.src_path)
+                    if restored and self.action_client:
                         self.action_client.submit_action_request(
                             target_file=filename,
                             file_path=event.src_path,
@@ -161,15 +197,19 @@ class ThreatFileHandler(FileSystemEventHandler):
 
             if is_removable and not is_approved:
                 filename = os.path.basename(event.src_path)
-                quarantined = False
+                if self._should_throttle_interception(event.src_path, filename, "usb_export"):
+                    return  # Debounce subsequent chunk writes for active pending transfer
+
+                source_path = self._find_source_candidate(filename)
                 if self.vault:
-                    quarantined = self.vault.quarantine_file(event.src_path)
+                    self.vault.quarantine_file(event.src_path, source_path=source_path)
 
                 if self.action_client:
                     self.action_client.submit_action_request(
                         target_file=filename,
                         file_path=event.src_path,
                         action_type="usb_export",
+                        source_path=source_path,
                         risk_context=f"Unauthorized write to USB file '{filename}' intercepted and quarantined. Awaiting Admin Approval."
                     )
                 self._emit("usb_export_intercepted", event.src_path, event)
@@ -188,14 +228,20 @@ class ThreatFileHandler(FileSystemEventHandler):
 
             if is_removable and not is_approved:
                 filename = os.path.basename(event.dest_path)
+                source_path = event.src_path if os.path.exists(event.src_path) else self._find_source_candidate(filename)
+
+                if self._should_throttle_interception(event.dest_path, filename, "usb_export"):
+                    return
+
                 if self.vault:
-                    self.vault.quarantine_file(event.dest_path)
+                    self.vault.quarantine_file(event.dest_path, source_path=source_path)
 
                 if self.action_client:
                     self.action_client.submit_action_request(
                         target_file=filename,
                         file_path=event.dest_path,
                         action_type="usb_export",
+                        source_path=source_path,
                         risk_context=f"Unauthorized file move '{filename}' to removable drive intercepted. Awaiting Admin Approval."
                     )
                 self._emit("usb_export_intercepted", event.dest_path, event)
@@ -203,6 +249,7 @@ class ThreatFileHandler(FileSystemEventHandler):
                 if self.vault:
                     self.vault.backup_file(event.dest_path)
                 self._emit("file_move", event.dest_path, event)
+
 
 
     def _emit(self, event_type, path, event):

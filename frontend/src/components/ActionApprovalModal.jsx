@@ -133,7 +133,20 @@ export default function ActionApprovalModal({ isOpen, onClose, onActionResolved 
     }
   };
 
-  const pendingList = requests.filter(r => r.status === 'PENDING' && !r.is_expired);
+  // Filter and deduplicate pending items defensively
+  const uniquePending = [];
+  const seenPendingKeys = new Set();
+  for (const r of requests) {
+    if (r.status === 'PENDING' && !r.is_expired) {
+      const key = `${r.employee_id}_${r.action_type}_${r.target_file}`;
+      if (!seenPendingKeys.has(key)) {
+        seenPendingKeys.add(key);
+        uniquePending.push(r);
+      }
+    }
+  }
+
+  const pendingList = uniquePending;
   const historyList = requests.filter(r => r.status !== 'PENDING' || r.is_expired);
   const currentList = tab === 'pending' ? pendingList : historyList;
 

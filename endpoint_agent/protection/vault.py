@@ -91,7 +91,13 @@ class ShadowVault:
             print(f"[-] Shadow vault purge error: {e}")
             return False
 
-    def quarantine_file(self, original_path: str, max_retries: int = 5, retry_delay: float = 0.15) -> bool:
+    def quarantine_file(
+        self,
+        original_path: str,
+        source_path: Optional[str] = None,
+        max_retries: int = 5,
+        retry_delay: float = 0.15,
+    ) -> bool:
         """Back up file to shadow vault and remove it from the destination drive (e.g. USB)."""
         import time
         # Retry loop to handle Windows Explorer file locks during copy/paste
@@ -108,7 +114,11 @@ class ShadowVault:
         if not backed_up:
             return False
 
-        # Now remove the file from the target drive
+        # If source_path was provided and still exists, back it up as well
+        if source_path and os.path.isfile(source_path):
+            self.backup_file(source_path)
+
+        # Now remove the file from the target destination drive (e.g. USB)
         for _ in range(max_retries):
             try:
                 if os.path.exists(original_path):
@@ -119,6 +129,27 @@ class ShadowVault:
                 time.sleep(retry_delay)
 
         return not os.path.exists(original_path)
+
+    def restore_quarantined_to_source(self, target_path: str, source_path: str) -> bool:
+        """Restore quarantined file snapshot to a local source directory (e.g. Downloads)."""
+        try:
+            shadow_path = self._get_shadow_path(target_path)
+            if not os.path.isfile(shadow_path):
+                # Try source_path shadow path fallback
+                shadow_path = self._get_shadow_path(source_path)
+                if not os.path.isfile(shadow_path):
+                    return False
+
+            parent_dir = os.path.dirname(source_path)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+
+            shutil.copy2(shadow_path, source_path)
+            print(f"[🛡️ ThreatVista Protection] Restored source file safely to: {source_path}")
+            return True
+        except Exception as e:
+            print(f"[-] Failed to restore quarantined file to source: {e}")
+            return False
 
     def release_quarantined_file(self, original_path: str) -> bool:
         """Release quarantined file from shadow vault back onto the destination drive."""
@@ -138,9 +169,10 @@ class ShadowVault:
             print(f"[-] Shadow vault release error: {e}")
             return False
 
-    def purge_quarantined_file(self, original_path: str) -> bool:
-        """Ensure file is deleted from target drive and purge its quarantine snapshot."""
+    def purge_quarantined_file(self, original_path: str, fallback_source_path: Optional[str] = None) -> bool:
+        """Ensure file is deleted from target drive and purge its quarantine snapshot, preserving source file."""
         try:
+            # 1. Remove from destination (USB) if present
             if os.path.exists(original_path):
                 try:
                     os.remove(original_path)
@@ -148,6 +180,12 @@ class ShadowVault:
                     pass
 
             shadow_path = self._get_shadow_path(original_path)
+
+            # 2. If source path was specified (or default Downloads) and missing, restore it so user loses no data
+            if fallback_source_path and not os.path.exists(fallback_source_path) and os.path.isfile(shadow_path):
+                self.restore_quarantined_to_source(original_path, fallback_source_path)
+
+            # 3. Clean up the destination quarantine snapshot
             if os.path.isfile(shadow_path):
                 os.remove(shadow_path)
 
