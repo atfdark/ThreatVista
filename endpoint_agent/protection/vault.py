@@ -91,11 +91,41 @@ class ShadowVault:
             print(f"[-] Shadow vault purge error: {e}")
             return False
 
+    @staticmethod
+    def _force_remove_file(path: str, max_retries: int = 15, retry_delay: float = 0.2) -> bool:
+        """Forcefully remove a file, clearing read-only flags and handling Windows Explorer write locks with retries."""
+        import time
+        import stat
+        if not path or not os.path.exists(path):
+            return True
+
+        for _ in range(max_retries):
+            try:
+                # Reset file attributes (remove read-only / hidden flags if set)
+                try:
+                    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                except Exception:
+                    pass
+
+                # Try truncating file if write handle can open it
+                try:
+                    with open(path, "w") as f:
+                        f.truncate(0)
+                except Exception:
+                    pass
+
+                os.remove(path)
+                return True
+            except (OSError, PermissionError):
+                time.sleep(retry_delay)
+
+        return not os.path.exists(path)
+
     def quarantine_file(
         self,
         original_path: str,
         source_path: Optional[str] = None,
-        max_retries: int = 5,
+        max_retries: int = 25,
         retry_delay: float = 0.15,
     ) -> bool:
         """Back up file to shadow vault and remove it from the destination drive (e.g. USB)."""
@@ -119,16 +149,10 @@ class ShadowVault:
             self.backup_file(source_path)
 
         # Now remove the file from the target destination drive (e.g. USB)
-        for _ in range(max_retries):
-            try:
-                if os.path.exists(original_path):
-                    os.remove(original_path)
-                print(f"[🛡️ ThreatVista Protection] Quarantined file from USB to Shadow Vault: {original_path}")
-                return True
-            except (OSError, PermissionError):
-                time.sleep(retry_delay)
-
-        return not os.path.exists(original_path)
+        removed = self._force_remove_file(original_path, max_retries=max_retries, retry_delay=retry_delay)
+        if removed:
+            print(f"[🛡️ ThreatVista Protection] Quarantined file from USB to Shadow Vault: {original_path}")
+        return removed
 
     def restore_quarantined_to_source(self, target_path: str, source_path: str) -> bool:
         """Restore quarantined file snapshot to a local source directory (e.g. Downloads)."""
@@ -172,12 +196,11 @@ class ShadowVault:
     def purge_quarantined_file(self, original_path: str, fallback_source_path: Optional[str] = None) -> bool:
         """Ensure file is deleted from target drive and purge its quarantine snapshot, preserving source file."""
         try:
-            # 1. Remove from destination (USB) if present
-            if os.path.exists(original_path):
-                try:
-                    os.remove(original_path)
-                except Exception:
-                    pass
+            # 1. Remove from destination (USB) forcefully with retries
+            removed_from_target = self._force_remove_file(original_path, max_retries=15, retry_delay=0.2)
+            if not removed_from_target:
+                print(f"[!] Warning: Could not remove target file from USB: {original_path}")
+                return False
 
             shadow_path = self._get_shadow_path(original_path)
 
@@ -187,7 +210,10 @@ class ShadowVault:
 
             # 3. Clean up the destination quarantine snapshot
             if os.path.isfile(shadow_path):
-                os.remove(shadow_path)
+                try:
+                    os.remove(shadow_path)
+                except Exception:
+                    pass
 
             print(f"[🛡️ ThreatVista Protection] Purged rejected file from USB & Vault: {original_path}")
             return True

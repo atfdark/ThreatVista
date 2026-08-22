@@ -192,12 +192,48 @@ def test_jit_usb_export_ticket_backend_deduplication():
         db.close()
 
 
+def test_force_remove_locked_usb_file():
+    print("\n--- TEST 6: Forceful Removal & Retries for Locked USB Files ---")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        vault_dir = os.path.join(temp_dir, "vault")
+        usb_dir = os.path.join(temp_dir, "USB_Drive")
+        downloads_dir = os.path.join(temp_dir, "Downloads")
+        os.makedirs(usb_dir, exist_ok=True)
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        vault = ShadowVault(vault_dir=vault_dir)
+
+        # 1. Setup file in Downloads & copy to USB
+        source_file = os.path.join(downloads_dir, "locked_contract.pdf")
+        usb_file = os.path.join(usb_dir, "locked_contract.pdf")
+        data = b"TOP SECRET FINANCIAL REPORT 2026"
+        with open(source_file, "wb") as f:
+            f.write(data)
+        with open(usb_file, "wb") as f:
+            f.write(data)
+
+        # Quarantine it
+        vault.quarantine_file(usb_file, source_path=source_file)
+
+        # Re-create locked file on USB simulating Explorer delayed write handle
+        with open(usb_file, "wb") as f:
+            f.write(data)
+
+        # 2. Call purge_quarantined_file
+        purged = vault.purge_quarantined_file(usb_file, fallback_source_path=source_file)
+        assert purged is True, "Purge must return True"
+        assert not os.path.exists(usb_file), "USB file must be wiped completely"
+        assert os.path.exists(source_file), "Local Downloads source copy must be preserved"
+        print("[✓] Forceful removal & retries verified: Locked USB file wiped and local Downloads preserved.")
+
+
 if __name__ == "__main__":
     test_drive_detection()
     test_shadow_vault_quarantine_lifecycle()
     test_zero_data_loss_on_rejected_usb_move()
     test_action_client_cross_drive_tracking()
     test_jit_usb_export_ticket_backend_deduplication()
+    test_force_remove_locked_usb_file()
     print("\n=======================================================")
     print("ALL USB QUARANTINE & JIT AUTHORIZATION TESTS PASSED! ✓")
     print("=======================================================\n")

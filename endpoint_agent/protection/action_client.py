@@ -212,16 +212,20 @@ class ActionProtectionClient:
                     act_type = req.get("action_type", "file_delete")
 
                     if path:
-                        print(f"[+] Admin APPROVED action #{req_id} ({act_type}) for: {path}")
-                        self.allow_once(path)
-                        self.processed_ticket_ids.add(req_id)
-
                         if act_type in ("usb_export", "usb_copy"):
                             # Release quarantined file back to USB drive
-                            self.vault.release_quarantined_file(path)
-                            self.notify_user_desktop(target, act_type, status="APPROVED")
+                            released = self.vault.release_quarantined_file(path)
+                            if released or os.path.exists(path):
+                                print(f"[+] Admin APPROVED action #{req_id} ({act_type}) for: {path}")
+                                self.allow_once(path)
+                                self.processed_ticket_ids.add(req_id)
+                                self.notify_user_desktop(target, act_type, status="APPROVED")
+                            else:
+                                print(f"[!] Will retry releasing approved file to USB #{req_id}: {path}")
                         elif act_type == "file_delete":
-                            # Execute the deletion now that Admin has approved
+                            print(f"[+] Admin APPROVED action #{req_id} ({act_type}) for: {path}")
+                            self.allow_once(path)
+                            self.processed_ticket_ids.add(req_id)
                             self.vault.purge_file(path)
                             self.notify_user_desktop(target, act_type, status="APPROVED")
         except Exception:
@@ -243,16 +247,19 @@ class ActionProtectionClient:
                     act_type = req.get("action_type", "file_delete")
 
                     if path:
-                        print(f"[-] Admin REJECTED action #{req_id} ({act_type}) for: {path}")
-                        self.processed_ticket_ids.add(req_id)
-
                         if act_type in ("usb_export", "usb_copy"):
                             # Wipe/purge file from USB and purge quarantine, preserving local source
                             source_path = self.get_source_path(target, path)
-                            self.vault.purge_quarantined_file(path, fallback_source_path=source_path)
-                            self.notify_user_desktop(target, act_type, status="REJECTED")
+                            purged = self.vault.purge_quarantined_file(path, fallback_source_path=source_path)
+                            if purged or not os.path.exists(path):
+                                print(f"[-] Admin REJECTED action #{req_id} ({act_type}) for: {path}")
+                                self.processed_ticket_ids.add(req_id)
+                                self.notify_user_desktop(target, act_type, status="REJECTED")
+                            else:
+                                print(f"[!] Will retry purging rejected file on USB #{req_id}: {path}")
                         elif act_type == "file_delete":
-                            # File is already restored on C: drive, just notify
+                            print(f"[-] Admin REJECTED action #{req_id} ({act_type}) for: {path}")
+                            self.processed_ticket_ids.add(req_id)
                             self.notify_user_desktop(target, act_type, status="REJECTED")
         except Exception:
             pass
