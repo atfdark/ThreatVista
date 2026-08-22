@@ -2,9 +2,11 @@ import os
 import time
 import threading
 from datetime import datetime
+from typing import Optional, List, Dict, Any, Set
 import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
 
 # High-noise system directories to ignore, just in case they appear on other drives
 EXCLUDED_PATHS = [
