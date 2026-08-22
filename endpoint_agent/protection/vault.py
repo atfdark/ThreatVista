@@ -90,3 +90,70 @@ class ShadowVault:
         except Exception as e:
             print(f"[-] Shadow vault purge error: {e}")
             return False
+
+    def quarantine_file(self, original_path: str, max_retries: int = 5, retry_delay: float = 0.15) -> bool:
+        """Back up file to shadow vault and remove it from the destination drive (e.g. USB)."""
+        import time
+        # Retry loop to handle Windows Explorer file locks during copy/paste
+        backed_up = False
+        for _ in range(max_retries):
+            if not os.path.exists(original_path):
+                time.sleep(retry_delay)
+                continue
+            if self.backup_file(original_path):
+                backed_up = True
+                break
+            time.sleep(retry_delay)
+
+        if not backed_up:
+            return False
+
+        # Now remove the file from the target drive
+        for _ in range(max_retries):
+            try:
+                if os.path.exists(original_path):
+                    os.remove(original_path)
+                print(f"[🛡️ ThreatVista Protection] Quarantined file from USB to Shadow Vault: {original_path}")
+                return True
+            except (OSError, PermissionError):
+                time.sleep(retry_delay)
+
+        return not os.path.exists(original_path)
+
+    def release_quarantined_file(self, original_path: str) -> bool:
+        """Release quarantined file from shadow vault back onto the destination drive."""
+        try:
+            shadow_path = self._get_shadow_path(original_path)
+            if not os.path.isfile(shadow_path):
+                return False
+
+            parent_dir = os.path.dirname(original_path)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+
+            shutil.copy2(shadow_path, original_path)
+            print(f"[🛡️ ThreatVista Protection] Released approved file to USB: {original_path}")
+            return True
+        except Exception as e:
+            print(f"[-] Shadow vault release error: {e}")
+            return False
+
+    def purge_quarantined_file(self, original_path: str) -> bool:
+        """Ensure file is deleted from target drive and purge its quarantine snapshot."""
+        try:
+            if os.path.exists(original_path):
+                try:
+                    os.remove(original_path)
+                except Exception:
+                    pass
+
+            shadow_path = self._get_shadow_path(original_path)
+            if os.path.isfile(shadow_path):
+                os.remove(shadow_path)
+
+            print(f"[🛡️ ThreatVista Protection] Purged rejected file from USB & Vault: {original_path}")
+            return True
+        except Exception as e:
+            print(f"[-] Shadow vault purge error: {e}")
+            return False
+

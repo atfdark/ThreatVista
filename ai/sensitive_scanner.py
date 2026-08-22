@@ -111,31 +111,36 @@ class SensitiveAssetScanner:
 
         for item in active_keywords:
             raw_kw = item.get("keyword", "")
+            if not raw_kw:
+                continue
             kw = raw_kw.lower().strip()
             if not kw:
                 continue
 
-            kw_clean = re.sub(r"[\W_]+", " ", kw)
-            kw_tokens = kw_clean.split()
-
             is_match = False
 
             # 1. Exact or substring match of full keyword in text or unified text
-            if kw in full_text or kw_clean in unified_text:
+            if kw in full_text:
                 is_match = True
             # 2. Token match (exact / plural / token starts with kw)
             elif any(cls._token_matches(kw, t) for t in tokens):
                 is_match = True
-            # 3. Multi-word phrase match without separators (e.g. projectalpha)
-            elif len(kw_tokens) > 1:
-                kw_condensed = "".join(kw_tokens)
-                full_condensed = re.sub(r"[\W_]+", "", full_text)
-                if kw_condensed in full_condensed:
+            elif " " in kw or "_" in kw:
+                kw_clean = kw.replace("_", " ").strip()
+                if kw_clean in unified_text:
                     is_match = True
+                else:
+                    kw_tokens = kw_clean.split()
+                    if len(kw_tokens) > 1:
+                        kw_condensed = "".join(kw_tokens)
+                        full_condensed = "".join(tokens)
+                        if kw_condensed in full_condensed:
+                            is_match = True
 
             if is_match and raw_kw not in matched_keywords:
                 matched_keywords.append(raw_kw)
                 matched_categories.add(item.get("category", "General"))
+
 
         match_count = len(matched_keywords)
         is_sensitive = match_count > 0
