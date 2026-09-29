@@ -1204,9 +1204,16 @@ async def broadcast_security_alert(
     raw_event_data: Optional[dict] = None
 ):
     """Broadcast a structured, actionable real-time security alert frame for SOC dashboards."""
+    raw = raw_event_data or {}
+    if not emp:
+        emp_id = (event.employee_id if event else None) or raw.get("employee_id")
+        if emp_id:
+            emp = db.query(models.Employee).filter(models.Employee.id == emp_id).first()
+        if not emp:
+            emp = db.query(models.Employee).first()
+
     dev = get_device(db, emp.id) if emp else None
     dev_dict = device_to_dict(dev) if dev else {}
-    raw = raw_event_data or {}
 
     event_type = (event.event_type if event else raw.get("event_type", "")) or ""
     if "usb" in event_type:
@@ -1247,11 +1254,12 @@ async def broadcast_security_alert(
         "alert_id": alert.id if alert else None,
         "alert_type": alert_category,
         "title": default_title,
-        "employee_id": emp.id if emp else (event.employee_id if event else 1),
-        "employee_name": emp.name if emp else "Unknown Employee",
+        "employee_id": emp.id if emp else 1,
+        "employee_name": emp.name if emp else "Enterprise Employee",
         "department": emp.department if emp else "General",
         "hostname": dev_dict.get("hostname") or "ENDPOINT-PC",
         "device_id": dev_dict.get("device_id") or (f"DEV-{emp.id:04d}" if emp else "DEV-0001"),
+
         "device_name": device_name,
         "vendor_id": vendor_id,
         "product_id": product_id,
@@ -2642,30 +2650,51 @@ def get_user_threat_timeline_endpoint(
         raise HTTPException(status_code=404, detail="Employee not found")
 
     timeline_items = []
+    sensitive_keywords = ["salary", "employee", "client", "budget", "source_code", "contract", "password", "secret", "financial", "dump", "database", "ssn", "credit"]
 
-    # Telemetry events
-    events = db.query(models.Event).filter(models.Event.employee_id == user_id).order_by(models.Event.timestamp.desc()).limit(40).all()
+    # 1. Telemetry events (up to 100)
+    events = db.query(models.Event).filter(models.Event.employee_id == user_id).order_by(models.Event.timestamp.desc()).limit(100).all()
     for ev in events:
         category = "FILE"
         severity = "LOW"
-        title = f"{ev.event_type.replace('_', ' ').title()}"
         icon = "file"
+        ev_type = (ev.event_type or "").lower()
+        title = f"{ev.event_type.replace('_', ' ').title() if ev.event_type else 'File Activity'}"
         
-        if "usb" in (ev.event_type or "").lower() or ev.usb_status == "inserted":
+        fname = (ev.filename or "").lower()
+        details = (ev.details or "").lower()
+        is_sensitive = any(k in fname or k in details for k in sensitive_keywords)
+
+        if "usb" in ev_type or ev.usb_status in ("inserted", "blocked", "quarantined"):
             category = "USB"
             severity = "HIGH"
             icon = "usb"
-            title = "External USB Device Inserted"
-        elif "delete" in (ev.event_type or "").lower():
+            title = f"USB Removable Storage Operation: {ev.filename or 'Device Event'}"
+        elif "delete" in ev_type:
             category = "VAULT"
             severity = "HIGH"
             icon = "shield"
-            title = f"File Deletion Intercepted & Restored: {ev.filename or 'Protected File'}"
-        elif "login" in (ev.event_type or "").lower():
+            title = f"File Deletion Intercepted & Restored: {ev.filename or 'Protected Asset'}"
+        elif "network" in ev_type:
+            category = "NETWORK"
+            severity = "MEDIUM" if not is_sensitive else "HIGH"
+            icon = "network"
+            title = f"Network Data Transfer ({ev.network_upload or 'Active Transfer'})"
+        elif "process" in ev_type:
+            category = "PROCESS"
+            severity = "MEDIUM"
+            icon = "cpu"
+            title = f"Process Execution: {ev.filename or 'System Binary'}"
+        elif "login" in ev_type:
             category = "AUTH"
             severity = "LOW"
             icon = "key"
             title = "User Authenticated to Workstation"
+        elif is_sensitive:
+            category = "SENSITIVE"
+            severity = "HIGH"
+            icon = "file-text"
+            title = f"Sensitive Asset Accessed: {ev.filename or 'Confidential Record'}"
 
         timeline_items.append({
             "id": f"event_{ev.id}",
@@ -2674,35 +2703,67 @@ def get_user_threat_timeline_endpoint(
             "severity": severity,
             "icon": icon,
             "title": title,
-            "detail": ev.details or f"File: {ev.filename} ({ev.size or 'N/A'}) | Path: {ev.folder or 'Local'}",
+            "detail": ev.details or f"File: {ev.filename} ({ev.size or 'N/A'}) | Path: {ev.folder or 'Local Workstation'}",
             "raw_type": ev.event_type,
+            "filename": ev.filename,
+            "folder": ev.folder,
+            "size": ev.size,
+            "network_upload": ev.network_upload,
+            "usb_status": ev.usb_status,
+            "is_sensitive": is_sensitive,
         })
 
-    # Action requests
-    requests = db.query(models.ActionRequest).filter(models.ActionRequest.employee_id == user_id).order_by(models.ActionRequest.requested_at.desc()).limit(20).all()
+    # 2. JIT Action Requests & Approvals (Full Lifecycle: Approved, Rejected, Pending, Quorum)
+    requests = db.query(models.ActionRequest).filter(models.ActionRequest.employee_id == user_id).order_by(models.ActionRequest.requested_at.desc()).limit(50).all()
     for req in requests:
+        action_title = "File Deletion" if req.action_type == "file_delete" else ("USB Exfiltration" if req.action_type == "usb_export" else "Privileged Action")
+        status_label = req.status.upper()
+        
+        if status_label in ("APPROVED", "PARTIALLY_APPROVED"):
+            status_desc = f"✅ APPROVED by {req.resolved_by or 'Security Admin'}"
+            if req.resolution_notes:
+                status_desc += f" (Note: {req.resolution_notes})"
+            severity = "LOW"
+        elif status_label == "REJECTED":
+            status_desc = f"❌ REJECTED / BLOCKED by {req.resolved_by or 'Security Team'}"
+            if req.resolution_notes:
+                status_desc += f" (Reason: {req.resolution_notes})"
+            severity = "CRITICAL"
+        else:
+            status_desc = f"⏳ PENDING REVIEW (Quorum: {req.current_approvals or 0}/{req.required_approvals or 1} Approvals)"
+            severity = "HIGH"
+
         timeline_items.append({
             "id": f"req_{req.id}",
-            "timestamp": req.requested_at.isoformat() if req.requested_at else datetime.utcnow().isoformat(),
+            "timestamp": (req.resolved_at or req.requested_at or datetime.utcnow()).isoformat(),
             "category": "APPROVAL",
-            "severity": "CRITICAL" if req.calculated_risk_score >= 75 else "HIGH",
-            "icon": "alert",
-            "title": f"JIT Action Authorization Ticket #{req.id} ({req.file_classification})",
-            "detail": f"Target: {req.target_file} | Status: {req.status} | Risk: {req.calculated_risk_score}% | Quorum: {req.current_approvals or 0}/{req.required_approvals or 1}",
+            "severity": severity,
+            "icon": "user-check" if status_label == "APPROVED" else ("shield-alert" if status_label == "REJECTED" else "alert"),
+            "title": f"JIT Action Approval Ticket #{req.id}: {action_title} — [{status_label}]",
+            "detail": f"Target: {req.target_file} | Classification: {req.file_classification} (Tier: {req.policy_tier}) | Result: {status_desc} | Risk: {req.calculated_risk_score}%",
             "raw_type": "jit_request",
+            "approval_status": status_label,
+            "resolved_by": req.resolved_by,
+            "resolution_notes": req.resolution_notes,
+            "policy_tier": req.policy_tier,
+            "file_classification": req.file_classification,
+            "current_approvals": req.current_approvals or 0,
+            "required_approvals": req.required_approvals or 1,
+            "target_file": req.target_file,
+            "file_path": req.file_path,
         })
 
-    # Alerts
-    alerts = db.query(models.Alert).filter(models.Alert.employee_id == user_id).order_by(models.Alert.timestamp.desc()).limit(20).all()
+    # 3. Security Alerts & Threat Correlations
+    alerts = db.query(models.Alert).filter(models.Alert.employee_id == user_id).order_by(models.Alert.timestamp.desc()).limit(40).all()
     for al in alerts:
         timeline_items.append({
             "id": f"alert_{al.id}",
             "timestamp": al.timestamp.isoformat() if al.timestamp else datetime.utcnow().isoformat(),
             "category": "ALERT",
-            "severity": "CRITICAL" if al.severity == "High" else "HIGH",
+            "severity": "CRITICAL" if al.severity in ("Critical", "High") else "HIGH",
             "icon": "shield-alert",
-            "title": f"Security Alert: {al.reason[:60]}...",
-            "detail": al.reason,
+            "title": f"Security Detection Trigger: {al.reason[:70]}",
+            "detail": f"Rule: {al.reason} | Severity: {al.severity} | Status: {al.status}",
             "raw_type": "security_alert",
         })
 
@@ -2713,7 +2774,7 @@ def get_user_threat_timeline_endpoint(
         "employee_id": emp.id,
         "employee_name": emp.name,
         "department": emp.department,
-        "total_events": len(timeline_items),
+        "total_items": len(timeline_items),
         "timeline": timeline_items,
     }
 

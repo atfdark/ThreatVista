@@ -107,7 +107,7 @@ export default function Dashboard() {
         prev.map((emp) => {
           const upd = data[emp.id] ?? data[String(emp.id)];
           if (!upd) return emp;
-          return { ...emp, risk_score: upd.score, status: upd.status, incident: null };
+          return { ...emp, risk_score: upd.score, status: upd.status, incident: emp.incident };
         }).sort((a, b) => primaryRisk(b) - primaryRisk(a))
       );
       api.getStats().then(setStats).catch(() => {});
