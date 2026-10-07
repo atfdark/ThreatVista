@@ -133,11 +133,17 @@ def register_device(employee_email: str, device_info: dict):
 
 
 def send_heartbeat(device_id: str, metrics: dict):
-    """Send a heartbeat so the backend can mark the device online/offline."""
+    """Send a heartbeat so the backend can mark the device online/offline.
+
+    Returns the full JSON response dict (which includes pending commands) on
+    success, or None on failure.
+    """
     payload = {"device_id": device_id, **metrics}
     try:
         response = requests.post(f"{API_BASE_URL}/agent/heartbeat", json=payload, headers=_headers(), timeout=10)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return response.json()
+        return None
     except Exception as exc:
         print(f"Failed to send heartbeat: {exc}")
-        return False
+        return None

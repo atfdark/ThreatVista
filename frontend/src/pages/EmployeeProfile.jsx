@@ -552,9 +552,9 @@ export default function EmployeeProfile() {
                 type="button"
                 onClick={() => setShowCopilotDrawer(true)}
                 className="px-3.5 py-2 bg-cyber-accent/20 hover:bg-cyber-accent/30 text-cyber-accent rounded border border-cyber-accent/50 text-[10px] font-mono font-bold uppercase tracking-wide transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)] cursor-pointer flex items-center gap-1.5"
-                title="Explain risk factors and generate containment playbook with ThreatVista AI Copilot"
+                title="Explain risk factors and generate containment playbook with ARGUS"
               >
-                <Sparkles className="h-3.5 w-3.5 text-cyber-accent animate-pulse" /> ASK COPILOT
+                <Sparkles className="h-3.5 w-3.5 text-cyber-accent animate-pulse" /> ASK ARGUS
               </button>
 
               {isAdmin && (
@@ -1139,7 +1139,7 @@ export default function EmployeeProfile() {
         </div>
       )}
 
-      {/* ThreatVista AI Copilot Drawer */}
+      {/* ARGUS Drawer */}
       <ThreatCopilotDrawer
         isOpen={showCopilotDrawer}
         onClose={() => setShowCopilotDrawer(false)}

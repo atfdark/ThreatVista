@@ -16,6 +16,15 @@ from sqlalchemy.orm import Session
 from backend.models.database import Employee, Event, Alert, Incident, ActionRequest, BehavioralAnomalyLog, UserBehaviorProfile
 
 
+def _upload_mb(value) -> float:
+    """Parse strings like '24 MB' / '1.5' into a float, never raising."""
+    import re as _re
+    try:
+        return float(_re.sub(r"[^0-9.]", "", str(value or "")) or 0)
+    except ValueError:
+        return 0.0
+
+
 # MITRE ATT&CK Technique Knowledge Mapping
 MITRE_MAPPING = [
     {
@@ -46,7 +55,7 @@ MITRE_MAPPING = [
         "technique_id": "T1567",
         "technique_name": "Exfiltration Over Web Service / Network",
         "tactic": "Exfiltration",
-        "condition": lambda events, alerts: any(e.network_upload and float(e.network_upload.replace("MB", "").strip() or 0) > 20 for e in events if e.network_upload)
+        "condition": lambda events, alerts: any(_upload_mb(e.network_upload) > 20 for e in events if e.network_upload)
     }
 ]
 
@@ -164,7 +173,7 @@ def explain_employee_risk(db: Session, employee_id: int) -> Dict[str, Any]:
 
     # Executive Copilot Markdown Explanation
     md_summary = (
-        f"### 🛡️ ThreatVista AI Copilot Analysis: {emp.name} ({emp.department} — {emp.role_type})\n\n"
+        f"### 🛡️ ARGUS Analysis: {emp.name} ({emp.department} — {emp.role_type})\n\n"
         f"**Risk Posture:** **{total_score}% ({emp.status.upper()})**\n\n"
         f"**Core Threat Vector:** "
         + (f"Attempted exfiltration and deletion of {factors[0]['factor']}." if factors else "Standard activity profile.")
@@ -201,6 +210,13 @@ def copilot_chat(
     context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Process conversational questions from SOC analysts and return structured AI responses."""
+    try:
+        from backend.services.argus_engine import argus_chat
+        return argus_chat(db, message, employee_id, context)
+    except Exception as exc:  # never break the chat — fall back to legacy heuristics
+        import logging
+        logging.getLogger(__name__).exception("ARGUS engine failed, using legacy path: %s", exc)
+
     msg_lower = (message or "").lower().strip()
     
     # 1. Target employee analysis
@@ -230,6 +246,58 @@ def copilot_chat(
                 "data": analysis["mitre_techniques"],
                 "suggested_actions": ["Isolate Endpoint", "Revoke JIT Tokens"],
             }
+
+    # 1.5 Dynamic Employee & Department Queries
+    all_employees = db.query(Employee).all()
+    
+    # Check if asking about a specific employee
+    for emp in all_employees:
+        if emp.name and emp.name.lower() in msg_lower.split():
+            analysis = explain_employee_risk(db, emp.id)
+            return {
+                "reply": analysis["markdown_analysis"],
+                "data": analysis,
+                "suggested_actions": [p["action"] for p in analysis["containment_playbook"]],
+            }
+
+    # Check if asking about a department
+    dept_keywords = {
+        "finance": "Finance", "financial": "Finance",
+        "hr": "HR", "human resources": "HR",
+        "engineering": "Engineering", "dev": "Engineering", "developer": "Engineering",
+        "sales": "Sales", "it": "IT Support", "support": "IT Support",
+        "marketing": "Marketing", "legal": "Legal"
+    }
+    
+    for kw, real_dept in dept_keywords.items():
+        if kw in msg_lower.split() or kw in msg_lower:
+            dept_emps = [e for e in all_employees if e.department and real_dept.lower() in e.department.lower()]
+            if dept_emps:
+                avg_risk = sum((e.risk_score or 0) for e in dept_emps) / len(dept_emps)
+                high_risk_count = sum(1 for e in dept_emps if (e.risk_score or 0) >= 50)
+                
+                bars = "█" * int(avg_risk // 5) + "░" * (20 - int(avg_risk // 5))
+                
+                reply_md = (
+                    f"### 📊 Sector Analysis: {real_dept}\n\n"
+                    f"**Average Risk Score:** {int(avg_risk)}%\n"
+                    f"`[{bars}]`\n\n"
+                    f"- **Total Employees:** {len(dept_emps)}\n"
+                    f"- **High-Risk Profiles:** {high_risk_count}\n\n"
+                )
+                
+                if avg_risk > 60:
+                    reply_md += "⚠️ **Warning:** This sector is showing highly anomalous behavior. A deep audit is recommended."
+                elif avg_risk > 30:
+                    reply_md += "🟡 **Notice:** Moderate risk detected. Monitor file exfiltration activity."
+                else:
+                    reply_md += "✅ **Nominal:** Sector activity is within standard baselines."
+                    
+                return {
+                    "reply": reply_md,
+                    "data": {"avg_risk": avg_risk, "count": len(dept_emps)},
+                    "suggested_actions": ["Show high-risk employees", "Analyze latest incident"]
+                }
 
     # 2. General SOC questions
     if "high risk" in msg_lower or "who is risk" in msg_lower or "suspicious" in msg_lower:
@@ -261,15 +329,43 @@ def copilot_chat(
             "suggested_actions": ["Trigger Ransomware Mass Rollback Demo", "Verify Vault Keys"],
         }
 
-    # Default fallback answer
+    import random
+
+    # 3. Handle Greetings & Small Talk
+    if msg_lower in ["hi", "hello", "hey", "greetings"]:
+        greetings = [
+            "Hello Analyst! I am **ARGUS**, your autonomous SOC assistant. How can I help you investigate today?",
+            "Greetings! **ARGUS** is online and monitoring telemetry. What's our focus?",
+            "Hi there! I'm **ARGUS**. Let me know if you need to pull forensic data or explain a risk score.",
+            "System nominal. **ARGUS** here. Ready to map MITRE techniques or run playbooks."
+        ]
+        return {
+            "reply": random.choice(greetings),
+            "data": {},
+            "suggested_actions": ["Show high-risk employees", "Analyze latest incident"]
+        }
+
+    if "what are u" in msg_lower or "what are you" in msg_lower or "who are you" in msg_lower:
+        identities = [
+            "I am **ARGUS**, the artificial intelligence brain behind ThreatVista. I analyze behavioral telemetry, intercept malicious file IO, and provide real-time SOC explainability.",
+            "My designation is **ARGUS**. I am a specialized cybersecurity LLM agent designed to automate insider threat detection and generate containment playbooks.",
+            "I am **ARGUS**, your AI Copilot. I ingest thousands of endpoint events per second and translate them into actionable, human-readable threat intelligence."
+        ]
+        return {
+            "reply": random.choice(identities),
+            "data": {},
+            "suggested_actions": ["How does AES-256 Vault protect files?"]
+        }
+
+    # Default fallback answer (Dynamic)
+    fallbacks = [
+        "I'm continuously monitoring endpoint telemetry. I can help you dig into risk scores, map MITRE tactics, or generate containment playbooks. What do you need?",
+        "**ARGUS ready.** I can explain complex risk behaviors or execute rapid ransomware rollbacks. Where should we begin?",
+        "I didn't quite catch a specific query. Try asking me to 'Explain risk score for an employee' or 'Show active MITRE techniques'."
+    ]
+    
     return {
-        "reply": (
-            f"**ThreatVista AI Copilot ready.** I can assist with:\n\n"
-            f"- **Explain Risk:** 'Why is employee risk score high?'\n"
-            f"- **Forensic Investigation:** 'Show all USB activity in Finance after 8 PM'\n"
-            f"- **Playbooks:** 'What is the containment playbook for this incident?'\n"
-            f"- **Mass Recovery:** 'How does the 500-file ransomware rollback work?'"
-        ),
+        "reply": random.choice(fallbacks),
         "data": {},
         "suggested_actions": ["Show high-risk employees", "Explain Shadow Vault AES-256", "Analyze latest incident"],
     }

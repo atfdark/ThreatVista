@@ -271,7 +271,7 @@ export default function Dashboard() {
         onClose={() => setShowRecoveryModal(false)}
       />
 
-      {/* ThreatVista AI Copilot Drawer */}
+      {/* ARGUS Drawer */}
       <ThreatCopilotDrawer
         isOpen={showCopilotDrawer}
         onClose={() => setShowCopilotDrawer(false)}
@@ -302,14 +302,14 @@ export default function Dashboard() {
             <span>Mass Rollback Demo</span>
           </button>
 
-          {/* AI Copilot Drawer Trigger */}
+          {/* ARGUS Drawer Trigger */}
           <button
             onClick={() => setShowCopilotDrawer(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyber-accent/20 text-cyber-accent border border-cyber-accent/50 hover:bg-cyber-accent/30 text-xs font-mono font-bold transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)]"
-            title="Open ThreatVista AI Security Copilot"
+            title="Open ARGUS"
           >
             <Bot className="h-3.5 w-3.5 animate-pulse" />
-            <span>AI Copilot</span>
+            <span>ARGUS</span>
           </button>
 
           {/* Live WebSocket Indicator */}

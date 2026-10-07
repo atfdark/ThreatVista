@@ -174,7 +174,7 @@ export default function Incidents() {
         onClose={() => setShowRecoveryModal(false)}
       />
 
-      {/* ThreatVista AI Copilot Drawer */}
+      {/* ARGUS Drawer */}
       <ThreatCopilotDrawer
         isOpen={showCopilotDrawer}
         onClose={() => setShowCopilotDrawer(false)}
@@ -205,10 +205,10 @@ export default function Incidents() {
               setShowCopilotDrawer(true);
             }}
             className="flex items-center gap-1.5 px-3 py-2 bg-cyber-accent/20 text-cyber-accent border border-cyber-accent/50 hover:bg-cyber-accent/30 rounded-lg text-xs font-mono font-bold transition-all shadow-[0_0_15px_rgba(168,85,247,0.2)]"
-            title="Ask ThreatVista AI Copilot"
+            title="Ask ARGUS"
           >
             <Bot className="h-4 w-4 animate-pulse" />
-            <span>AI COPILOT</span>
+            <span>ARGUS</span>
           </button>
 
           <button

@@ -59,22 +59,57 @@ export default function Analytics() {
     );
   }
 
-  const departmentRiskData = dashboardData?.department_risk || [
-    { department: 'HR', role: 'HR', avg_risk: 72, employee_count: 3 },
-    { department: 'Finance', role: 'Finance', avg_risk: 68, employee_count: 4 },
-    { department: 'Engineering', role: 'Developer', avg_risk: 45, employee_count: 8 },
-    { department: 'Sales', role: 'Sales', avg_risk: 38, employee_count: 5 },
-    { department: 'IT Support', role: 'IT Support', avg_risk: 25, employee_count: 3 }
-  ];
+  const departmentRiskData = dashboardData?.department_risk?.length > 0 
+    ? dashboardData.department_risk 
+    : [
+        { department: 'HR', role: 'HR', avg_risk: 72, employee_count: 3 },
+        { department: 'Finance', role: 'Finance', avg_risk: 68, employee_count: 4 },
+        { department: 'Engineering', role: 'Developer', avg_risk: 45, employee_count: 8 },
+        { department: 'Sales', role: 'Sales', avg_risk: 38, employee_count: 5 },
+        { department: 'IT Support', role: 'IT Support', avg_risk: 25, employee_count: 3 }
+      ];
 
-  const sensitiveAssetsData = dashboardData?.most_accessed_sensitive_assets || [
-    { keyword: 'salary', count: 14 },
-    { keyword: 'employee', count: 10 },
-    { keyword: 'client', count: 7 },
-    { keyword: 'budget', count: 5 },
-    { keyword: 'source_code', count: 4 },
-    { keyword: 'project_alpha', count: 3 }
-  ];
+  const sensitiveAssetsData = dashboardData?.most_accessed_sensitive_assets?.length > 0
+    ? dashboardData.most_accessed_sensitive_assets
+    : [
+        { keyword: 'salary', count: 14 },
+        { keyword: 'employee', count: 10 },
+        { keyword: 'client', count: 7 },
+        { keyword: 'budget', count: 5 },
+        { keyword: 'source_code', count: 4 },
+        { keyword: 'project_alpha', count: 3 }
+      ];
+
+  const hasRiskData = analytics?.risk_distribution?.some(d => d.count > 0);
+  const riskDistributionData = hasRiskData 
+    ? analytics.risk_distribution 
+    : [
+        { range: 'Low (0-30)', count: 42 },
+        { range: 'Medium (31-60)', count: 18 },
+        { range: 'High (61-80)', count: 7 },
+        { range: 'Critical (81-100)', count: 3 }
+      ];
+
+  const hasSeverityData = analytics?.severity_distribution?.some(d => d.count > 0);
+  const severityDistributionData = hasSeverityData
+    ? analytics.severity_distribution
+    : [
+        { severity: 'Low', count: 24 },
+        { severity: 'Medium', count: 36 },
+        { severity: 'High', count: 12 }
+      ];
+
+  const deviceActivityData = analytics?.device_activity?.length > 0
+    ? analytics.device_activity
+    : [
+        { name: 'Mon', files: 120, network: 45, usb: 2 },
+        { name: 'Tue', files: 340, network: 60, usb: 5 },
+        { name: 'Wed', files: 850, network: 120, usb: 18 },
+        { name: 'Thu', files: 210, network: 50, usb: 3 },
+        { name: 'Fri', files: 180, network: 40, usb: 1 },
+        { name: 'Sat', files: 45, network: 10, usb: 0 },
+        { name: 'Sun', files: 30, network: 5, usb: 0 }
+      ];
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
@@ -242,7 +277,7 @@ export default function Analytics() {
           <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-6">User Risk Score Distribution</h4>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={analytics?.risk_distribution || []}>
+              <BarChart data={riskDistributionData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
                 <XAxis dataKey="range" stroke="#64748b" fontSize={11} tickLine={false} />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
@@ -261,7 +296,7 @@ export default function Analytics() {
           <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-6">Security Alerts Severity Distribution</h4>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={analytics?.severity_distribution || []}>
+              <BarChart data={severityDistributionData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
                 <XAxis dataKey="severity" stroke="#64748b" fontSize={11} tickLine={false} />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
@@ -281,7 +316,7 @@ export default function Analytics() {
         <h4 className="text-sm font-bold tracking-wide uppercase font-mono mb-6">Anomalous Weekly Telemetry Trends</h4>
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={analytics?.device_activity || []}>
+            <AreaChart data={deviceActivityData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" opacity={0.3} />
               <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} />
               <YAxis stroke="#64748b" fontSize={11} tickLine={false} />

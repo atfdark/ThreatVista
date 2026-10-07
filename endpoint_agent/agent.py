@@ -33,6 +33,7 @@ from endpoint_agent.monitors.system_monitor import (
 )
 from endpoint_agent.protection.vault import ShadowVault
 from endpoint_agent.protection.action_client import ActionProtectionClient
+from endpoint_agent.protection.usb_blocker import USBBlocker
 
 HEARTBEAT_SECONDS = int(os.environ.get("AGENT_HEARTBEAT_SECONDS", "30"))
 
@@ -43,6 +44,7 @@ class EndpointAgent:
         self.employee_id = None
         self.device_id = None
         self._usb_monitor = None
+        self._processed_command_ids = set()  # Track commands already executed
         self.enrollment = enrollment.load_enrollment_config()
         self.device_identity = enrollment.load_device_identity()
 
@@ -58,6 +60,9 @@ class EndpointAgent:
         # Active Protection & JIT Authorization components
         self.vault = ShadowVault()
         self.action_client = ActionProtectionClient(self.vault)
+
+        # USB Blocker — real USB mass storage control
+        self.usb_blocker = USBBlocker()
 
         # Collect telemetry for ~1s (or 100 events) and send it as one bulk
         # request instead of one HTTP POST per event.
@@ -181,17 +186,24 @@ class EndpointAgent:
         self.running = True
         self.action_client.set_identity(self.employee_id, self.device_id)
 
-        # Heartbeat loop — keeps this device "online" in the SOC dashboard.
+        # Heartbeat loop — keeps this device "online" in the SOC dashboard
+        # and processes pending commands delivered via the heartbeat response.
         def heartbeat_loop():
             while self.running:
                 try:
                     if self.device_id:
                         metrics = get_system_metrics()
-                        send_heartbeat(self.device_id, {
+                        resp = send_heartbeat(self.device_id, {
                             "cpu_usage": metrics.get("cpu_usage"),
                             "ram_usage": metrics.get("ram_usage"),
                             "disk_usage": metrics.get("disk_usage"),
                         })
+                        # Process any pending commands from the heartbeat response
+                        if resp and isinstance(resp, dict):
+                            device_data = resp.get("device") or {}
+                            pending = device_data.get("pending_commands") or []
+                            for cmd in pending:
+                                self._process_command(cmd)
                 except Exception as e:
                     print(f"Heartbeat error: {e}")
                 time.sleep(HEARTBEAT_SECONDS)
@@ -217,10 +229,13 @@ class EndpointAgent:
         )
         print("[+] File monitor & Active Shadow Vault started")
 
-        # USB monitoring
-        self._usb_monitor = USBMonitor(self._event_callback)
+        # Check for Administrator privileges
+        self._check_elevation()
+
+        # USB monitoring (with real-time block enforcement)
+        self._usb_monitor = USBMonitor(self._event_callback, usb_blocker=self.usb_blocker)
         if self._usb_monitor.start():
-            print("[+] USB monitor started")
+            print("[+] USB monitor started (with real-time block enforcement)")
         else:
             print("[-] USB monitor not available (requires Windows with pywin32/WMI)")
 
@@ -281,9 +296,117 @@ class EndpointAgent:
             if self._usb_monitor:
                 self._usb_monitor.stop()
 
+    def _check_elevation(self):
+        """Check if the agent is running as Administrator (required for full protection)."""
+        import sys
+        if sys.platform == "win32":
+            import ctypes
+            try:
+                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+                if not is_admin:
+                    print("[-] WARNING: Agent is NOT running as Administrator. USB Registry blocks will fail.")
+                    self._event_callback({
+                        "event_type": "health_degraded",
+                        "details": "Agent running with insufficient privileges (Not Admin). Registry-level USB blocking will fail.",
+                        "urgent": True,
+                    })
+            except Exception:
+                pass
+
+    def _process_command(self, cmd: dict):
+        """Execute a remote command received from the backend via heartbeat."""
+        cmd_id = cmd.get("id")
+        command = cmd.get("command")
+
+        if cmd_id in self._processed_command_ids:
+            return  # Already executed
+
+        self._processed_command_ids.add(cmd_id)
+        result_msg = ""
+
+        if command == "disable_usb":
+            print(f"\n[⚡ REMOTE COMMAND] Executing: Disable USB Mass Storage (Command #{cmd_id})")
+            result = self.usb_blocker.block()
+            drives = result.get("drives_ejected", [])
+            reg_ok = result.get("registry_blocked", False)
+            result_msg = f"USB blocked (registry={'OK' if reg_ok else 'FAILED'}, ejected={drives})"
+
+            # Fire an event so the dashboard shows the block action
+            self._event_callback({
+                "event_type": "usb_blocked",
+                "details": f"USB mass storage DISABLED by admin command #{cmd_id}. "
+                           f"Registry: {'disabled' if reg_ok else 'unchanged (no admin)'}. "
+                           f"Ejected drives: {drives or 'none'}.",
+                "urgent": True,
+            })
+
+        elif command == "enable_usb":
+            print(f"\n[⚡ REMOTE COMMAND] Executing: Re-enable USB Mass Storage (Command #{cmd_id})")
+            result = self.usb_blocker.unblock()
+            reg_ok = result.get("registry_unblocked", False)
+            result_msg = f"USB unblocked (registry={'OK' if reg_ok else 'FAILED'})"
+
+            self._event_callback({
+                "event_type": "usb_unblocked",
+                "details": f"USB mass storage RE-ENABLED by admin command #{cmd_id}. "
+                           f"Registry: {'enabled' if reg_ok else 'unchanged (no admin)'}.",
+                "urgent": True,
+            })
+
+        elif command == "readonly_usb":
+            print(f"\n[⚡ REMOTE COMMAND] Executing: Enable USB Write Protection (Command #{cmd_id})")
+            result = self.usb_blocker.set_readonly()
+            reg_ok = result.get("registry_readonly", False)
+            result_msg = f"USB read-only mode enabled (registry={'OK' if reg_ok else 'FAILED'})"
+
+            self._event_callback({
+                "event_type": "usb_readonly",
+                "details": f"USB mass storage WRITE PROTECTION ENABLED by admin command #{cmd_id}. "
+                           f"Registry: {'enabled' if reg_ok else 'unchanged (no admin)'}.",
+                "urgent": True,
+            })
+
+        elif command == "readwrite_usb":
+            print(f"\n[⚡ REMOTE COMMAND] Executing: Disable USB Write Protection (Command #{cmd_id})")
+            result = self.usb_blocker.clear_readonly()
+            reg_ok = result.get("registry_readwrite", False)
+            result_msg = f"USB read-only mode disabled (registry={'OK' if reg_ok else 'FAILED'})"
+
+            self._event_callback({
+                "event_type": "usb_readwrite",
+                "details": f"USB mass storage WRITE PROTECTION DISABLED by admin command #{cmd_id}. "
+                           f"Registry: {'disabled' if reg_ok else 'unchanged (no admin)'}.",
+                "urgent": True,
+            })
+
+        else:
+            result_msg = f"Command '{command}' acknowledged (no agent-side action)"
+            print(f"[⚡ REMOTE COMMAND] Received: {command} (Command #{cmd_id}) — no action needed")
+
+        # Acknowledge back to the backend
+        self._ack_command(cmd_id, result_msg)
+
+    def _ack_command(self, command_id: int, result: str = None):
+        """Send command acknowledgment to the backend."""
+        import requests
+        try:
+            url = f"{get_backend_url()}/api/agent/command/ack"
+            payload = {
+                "device_id": self.device_id,
+                "command_id": command_id,
+                "result": result,
+            }
+            requests.post(url, json=payload, timeout=4)
+        except Exception as e:
+            print(f"[-] Failed to ack command #{command_id}: {e}")
+
     def stop(self):
         self.running = False
         self._batcher.stop()
+        # Restore USB if it was blocked when agent stops
+        if self.usb_blocker.is_blocked():
+            print("[*] Restoring USB access before shutdown...")
+            self.usb_blocker.unblock()
         print("\n[*] Stopping endpoint agent...")
 
 if __name__ == "__main__":

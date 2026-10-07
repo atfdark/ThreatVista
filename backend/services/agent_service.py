@@ -12,7 +12,7 @@ from typing import Dict, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.models.database import AgentEnrollmentToken, Device, Employee
+from backend.models.database import AgentEnrollmentToken, Device, Employee, RemoteCommand
 
 # An employee is considered online while a heartbeat was received within this
 # window. The endpoint agent heartbeats every endpoint_poll_seconds (default
@@ -144,7 +144,11 @@ def register_device(db: Session, employee_id: int, info: Dict) -> Dict:
 
 
 def heartbeat(db: Session, device_id: str, metrics: Dict) -> Optional[Dict]:
-    """Record a heartbeat from the agent, refreshing online status + health."""
+    """Record a heartbeat from the agent, refreshing online status + health.
+
+    Also returns any pending (unacknowledged) remote commands for this device's
+    employee, so the agent can act on them without a separate polling endpoint.
+    """
     device = db.query(Device).filter(Device.device_id == device_id).first()
     if device is None:
         return None
@@ -161,7 +165,56 @@ def heartbeat(db: Session, device_id: str, metrics: Dict) -> Optional[Dict]:
 
     db.commit()
     db.refresh(device)
-    return device_to_dict(device)
+
+    # Piggyback pending commands on the heartbeat response
+    pending_cmds = get_pending_commands(db, device.employee_id)
+
+    result = device_to_dict(device)
+    result["pending_commands"] = pending_cmds
+    return result
+
+
+def get_pending_commands(db: Session, employee_id: int) -> list:
+    """Return unacknowledged commands for an employee's device.
+
+    Commands move from 'Pending' -> 'Acknowledged' once the agent confirms
+    execution. Legacy 'Simulated' commands are also returned once (for
+    backward compatibility with the dashboard).
+    """
+    cmds = (
+        db.query(RemoteCommand)
+        .filter(
+            RemoteCommand.employee_id == employee_id,
+            RemoteCommand.status.in_(["Pending", "Simulated"]),
+        )
+        .order_by(RemoteCommand.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "command": c.command,
+            "status": c.status,
+            "details": c.details,
+            "requested_by": c.requested_by,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        }
+        for c in cmds
+    ]
+
+
+def acknowledge_command(db: Session, command_id: int, result_detail: str = None) -> bool:
+    """Mark a remote command as acknowledged (executed) by the agent."""
+    cmd = db.query(RemoteCommand).filter(RemoteCommand.id == command_id).first()
+    if cmd is None:
+        return False
+    cmd.status = "Acknowledged"
+    cmd.completed_at = _now()
+    if result_detail:
+        cmd.details = (cmd.details or "") + f" | Agent: {result_detail}"
+    db.commit()
+    return True
 
 
 def get_device(db: Session, employee_id: int) -> Optional[Device]:

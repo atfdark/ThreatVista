@@ -14,6 +14,9 @@ from backend.models.database import Employee, RemoteCommand
 # Allowed command types surfaced by the dashboard.
 ALLOWED_COMMANDS = {
     "disable_usb": "Disable USB mass storage on endpoint",
+    "enable_usb": "Re-enable USB mass storage on endpoint",
+    "readonly_usb": "Enable USB mass storage write protection (Read-Only)",
+    "readwrite_usb": "Disable USB mass storage write protection (Read/Write)",
     "restart_agent": "Restart ThreatVista agent service",
     "collect_logs": "Collect detailed process & event logs (24h)",
     "refresh_config": "Refresh endpoint monitoring configuration",
@@ -38,10 +41,9 @@ def request_command(
     cmd = RemoteCommand(
         employee_id=employee_id,
         command=command,
-        status="Simulated",
+        status="Pending",
         requested_by=requested_by or "dashboard",
         details=details or ALLOWED_COMMANDS[command],
-        completed_at=datetime.utcnow(),  # simulated = already "completed"
     )
 
     db.add(cmd)

@@ -4,33 +4,32 @@ import {
   Send,
   X,
   Sparkles,
-  ShieldAlert,
-  Terminal,
-  HelpCircle,
-  Zap,
-  CheckCircle,
-  ArrowRight,
   RefreshCw,
-  Cpu
+  Copy,
+  Check,
+  UserCheck
 } from 'lucide-react';
 import { api } from '../services/mockData';
+import Markdown from './Markdown';
 
 export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee = null }) {
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      sender: 'copilot',
-      text: `Hello Analyst! I am **ThreatVista AI Copilot**.\n\nI can analyze live endpoint telemetry, explain anomalous risk scores, map MITRE ATT&CK techniques, or execute forensic queries.`,
-      suggestedActions: [
-        'Why is this risk score high?',
-        'Show active MITRE ATT&CK techniques',
-        'Recommend containment playbook',
-        'How does AES-256 Vault protect files?'
-      ]
-    }
-  ]);
+  const initialGreeting = {
+    id: 1,
+    sender: 'copilot',
+    text: `### 👁️ Hello Analyst! I am **ARGUS**.\n\nI am ThreatVista's **explainable AI security copilot**. You can ask me anything about:\n\n- **Employees & Risk:** *"Tell me about Vaidehi"*, *"Is there any problem with her?"*, *"Why is her risk 100%?"*\n- **Forensic Activity:** *"Show all USB activity in Finance after 8 PM"*, *"Did anyone delete files today?"*\n- **Comparisons:** *"Compare Vaidehi and kamaal"*\n- **Incidents & Playbooks:** *"Analyze latest incident"*, *"What is the containment playbook?"*\n- **Concepts & Architecture:** *"How does Shadow Vault AES-256 protect files?"*, *"What is zero trust?"*`,
+    suggestedActions: [
+      'Give me a security overview',
+      'Show high-risk employees',
+      'Analyze latest incident',
+      'How does AES-256 Vault protect files?'
+    ]
+  };
+
+  const [messages, setMessages] = useState([initialGreeting]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [focusEmployee, setFocusEmployee] = useState(selectedEmployee);
+  const [copiedId, setCopiedId] = useState(null);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -43,21 +42,34 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
 
   useEffect(() => {
     if (selectedEmployee) {
+      setFocusEmployee(selectedEmployee);
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now(),
           sender: 'copilot',
-          text: `🔍 **Active Context Loaded:** Analyzing **${selectedEmployee.name}** (${selectedEmployee.department} — ${selectedEmployee.role_type}). Current Risk Score: **${selectedEmployee.risk_score || 0}%**.\n\nAsk me why their score escalated or what actions to take.`,
+          text: `🔍 **Active Context Loaded:** Focusing on **${selectedEmployee.name}** (${selectedEmployee.department} — ${selectedEmployee.role_type || 'General'}). Current Risk Score: **${selectedEmployee.risk_score || 0}%**.\n\nAsk me what they did, whether there is any problem, or what actions to take.`,
           suggestedActions: [
-            `Explain risk score for ${selectedEmployee.name}`,
-            `Show MITRE techniques for ${selectedEmployee.name}`,
-            `Generate containment steps`
+            `What did ${selectedEmployee.name.split(' ')[0]} do?`,
+            `Is there any problem with ${selectedEmployee.name.split(' ')[0]}?`,
+            `Why is ${selectedEmployee.name.split(' ')[0]}'s risk score high?`,
+            `Show ${selectedEmployee.name.split(' ')[0]}'s USB activity`
           ]
         }
       ]);
     }
   }, [selectedEmployee]);
+
+  const handleCopy = (id, text) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const handleClear = () => {
+    setMessages([initialGreeting]);
+    setFocusEmployee(selectedEmployee || null);
+  };
 
   const handleSend = async (customText = null) => {
     const textToSend = customText || input;
@@ -74,12 +86,32 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
     setLoading(true);
 
     try {
-      const res = await api.copilotChat(textToSend, selectedEmployee?.id);
+      // Build conversation history for context grounding
+      const history = messages
+        .filter((m) => m.sender === 'user' || m.sender === 'copilot')
+        .map((m) => ({
+          role: m.sender === 'user' ? 'user' : 'assistant',
+          text: m.text
+        }))
+        .slice(-10);
+
+      const targetEmpId = focusEmployee?.id || selectedEmployee?.id || null;
+
+      const res = await api.copilotChat(textToSend, targetEmpId, {
+        history,
+        focus_employee: focusEmployee
+      });
+
+      if (res?.focus_employee) {
+        setFocusEmployee(res.focus_employee);
+      }
+
       const copilotMsg = {
         id: Date.now() + 1,
         sender: 'copilot',
         text: res.reply || 'Analysis completed.',
-        suggestedActions: res.suggested_actions || []
+        suggestedActions: res.suggested_actions || [],
+        engine: res.engine || 'argus'
       };
       setMessages((prev) => [...prev, copilotMsg]);
     } catch (err) {
@@ -87,7 +119,7 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
         id: Date.now() + 1,
         sender: 'copilot',
         text: `⚠️ **AI Engine Notice:** Unable to contact reasoning backend (${err.message || err}). Falling back to local heuristic response.`,
-        suggestedActions: ['Try again', 'Show high risk employees']
+        suggestedActions: ['Give me a security overview', 'Show high-risk employees']
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
@@ -98,30 +130,63 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-lg bg-cyber-card/95 border-l border-cyber-border backdrop-blur-xl flex flex-col shadow-[0_0_50px_rgba(6,182,212,0.3)] animate-in slide-in-from-right duration-300">
+    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-xl lg:max-w-2xl bg-cyber-card/95 border-l border-cyber-border backdrop-blur-2xl flex flex-col shadow-[0_0_60px_rgba(6,182,212,0.25)] animate-in slide-in-from-right duration-300">
       {/* Header */}
-      <div className="p-4 border-b border-cyber-border flex items-center justify-between bg-cyber-bg/80">
+      <div className="p-4 border-b border-cyber-border flex items-center justify-between bg-cyber-bg/90">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-cyber-primary/20 border border-cyber-primary/40 flex items-center justify-center text-cyber-primary shadow-cyber">
-            <Bot className="h-5 w-5 animate-pulse" />
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-cyber-primary/20 to-cyber-secondary/20 border border-cyber-primary/40 flex items-center justify-center text-cyber-primary shadow-cyber relative overflow-hidden">
+            <Bot className="h-5 w-5 relative z-10" />
+            {loading && <div className="absolute inset-0 bg-cyber-primary/30 animate-pulse" />}
           </div>
           <div>
-            <h3 className="text-sm font-bold text-cyber-text tracking-wide flex items-center gap-1.5">
-              ThreatVista AI Copilot
-              <span className="h-2 w-2 rounded-full bg-cyber-success shadow-[0_0_8px_#10b981]"></span>
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-cyber-text tracking-wide flex items-center gap-1.5 font-mono">
+                ARGUS
+                <span className="h-2 w-2 rounded-full bg-cyber-success shadow-[0_0_8px_#10b981]" />
+              </h3>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyber-primary/10 border border-cyber-primary/30 text-cyber-primary">
+                AI Copilot
+              </span>
+            </div>
             <p className="text-[11px] text-cyber-muted font-mono">
-              Explainable Cybersecurity Assistant &amp; SOC Advisor
+              Explainable Cybersecurity Assistant & SOC Intelligence
             </p>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="text-cyber-muted hover:text-cyber-text p-1.5 rounded-lg hover:bg-cyber-border/40 transition-colors"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleClear}
+            title="Reset conversation"
+            className="text-cyber-muted hover:text-cyber-text p-1.5 rounded-lg hover:bg-cyber-border/40 transition-colors"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            onClick={onClose}
+            title="Close drawer"
+            className="text-cyber-muted hover:text-cyber-text p-1.5 rounded-lg hover:bg-cyber-border/40 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
+
+      {/* Focus employee indicator bar */}
+      {focusEmployee && (
+        <div className="px-4 py-2 bg-cyber-primary/5 border-b border-cyber-border flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-1.5 text-cyber-primary font-mono">
+            <UserCheck className="h-3.5 w-3.5" />
+            <span>Target Context: <strong>{focusEmployee.name}</strong></span>
+            {focusEmployee.department && <span className="text-cyber-muted">({focusEmployee.department})</span>}
+          </div>
+          <button
+            onClick={() => setFocusEmployee(null)}
+            className="text-cyber-muted hover:text-cyber-danger text-[10px] font-mono underline"
+          >
+            clear context
+          </button>
+        </div>
+      )}
 
       {/* Messages Stream */}
       <div className="flex-1 p-4 overflow-y-auto space-y-4 text-xs font-sans">
@@ -131,35 +196,50 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
             className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
           >
             <div
-              className={`max-w-[90%] p-3.5 rounded-xl border leading-relaxed ${
+              className={`group relative max-w-[95%] p-4 rounded-xl border leading-relaxed ${
                 msg.sender === 'user'
-                  ? 'bg-cyber-primary/20 text-cyber-text border-cyber-primary/40 rounded-br-none shadow-cyber'
-                  : 'bg-cyber-bg/90 text-cyber-text border-cyber-border rounded-bl-none shadow-sm'
+                  ? 'bg-cyber-primary/15 text-cyber-text border-cyber-primary/40 rounded-br-none shadow-cyber'
+                  : 'bg-cyber-bg/95 text-cyber-text border-cyber-border rounded-bl-none shadow-md'
               }`}
             >
-              {/* Message text with basic markdown formatting */}
-              <div className="space-y-2 whitespace-pre-wrap">
-                {msg.text.split('\n\n').map((para, pIdx) => (
-                  <p key={pIdx}>
-                    {para.split('\n').map((line, lIdx) => (
-                      <React.Fragment key={lIdx}>
-                        {line}
-                        {lIdx < para.split('\n').length - 1 && <br />}
-                      </React.Fragment>
-                    ))}
-                  </p>
-                ))}
-              </div>
+              {msg.sender === 'copilot' ? (
+                <div className="relative">
+                  <Markdown text={msg.text} />
+                  <div className="mt-2.5 pt-2 border-t border-cyber-border/40 flex items-center justify-between text-[10px] text-cyber-muted font-mono">
+                    <span>ARGUS Engine</span>
+                    <button
+                      onClick={() => handleCopy(msg.id, msg.text)}
+                      className="inline-flex items-center gap-1 hover:text-cyber-primary transition-colors"
+                    >
+                      {copiedId === msg.id ? (
+                        <>
+                          <Check className="h-3 w-3 text-cyber-success" />
+                          <span className="text-cyber-success">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap font-sans text-slate-100">
+                  {msg.text}
+                </div>
+              )}
             </div>
 
             {/* Quick Action Suggestion Chips */}
             {msg.suggestedActions && msg.suggestedActions.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1.5 max-w-[90%]">
+              <div className="mt-2 flex flex-wrap gap-1.5 max-w-[95%] animate-in fade-in slide-in-from-bottom-2 duration-300">
                 {msg.suggestedActions.map((action, aIdx) => (
                   <button
                     key={aIdx}
                     onClick={() => handleSend(action)}
-                    className="px-2.5 py-1 rounded-full bg-cyber-card border border-cyber-border hover:border-cyber-primary/60 text-cyber-muted hover:text-cyber-primary transition-all text-[11px] flex items-center gap-1 font-mono shadow-sm"
+                    className="px-2.5 py-1 rounded-full bg-cyber-card/90 border border-cyber-border hover:border-cyber-primary/60 text-slate-300 hover:text-cyber-primary transition-all text-[11px] flex items-center gap-1 font-mono shadow-sm hover:scale-[1.02]"
                   >
                     <Sparkles className="h-3 w-3 text-cyber-primary" />
                     <span>{action}</span>
@@ -170,10 +250,19 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
           </div>
         ))}
 
+        {/* Thinking Indicator */}
         {loading && (
-          <div className="flex items-center gap-2 text-cyber-primary bg-cyber-bg/60 p-3 rounded-lg border border-cyber-border max-w-[60%]">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            <span className="text-[11px] font-mono">Synthesizing telemetry &amp; MITRE matrix...</span>
+          <div className="flex items-start gap-2 max-w-[70%]">
+            <div className="p-3.5 rounded-xl bg-cyber-bg/95 text-cyber-text border border-cyber-border rounded-bl-none shadow-sm flex items-center gap-2.5">
+              <div className="flex space-x-1">
+                <div className="w-1.5 h-1.5 bg-cyber-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-1.5 h-1.5 bg-cyber-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-1.5 h-1.5 bg-cyber-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+              <span className="text-[11px] font-mono text-cyber-primary animate-pulse">
+                ARGUS is analyzing telemetry & baselines...
+              </span>
+            </div>
           </div>
         )}
 
@@ -181,7 +270,7 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
       </div>
 
       {/* Input Field */}
-      <div className="p-3 border-t border-cyber-border bg-cyber-bg/90">
+      <div className="p-3 border-t border-cyber-border bg-cyber-bg/95">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -193,8 +282,8 @@ export default function ThreatCopilotDrawer({ isOpen, onClose, selectedEmployee 
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Copilot (e.g. 'Why is risk 95%?' or 'Show USB activity')..."
-            className="flex-1 bg-cyber-card border border-cyber-border rounded-lg px-3.5 py-2.5 text-xs text-cyber-text placeholder:text-cyber-muted focus:outline-none focus:border-cyber-primary/60"
+            placeholder="Ask ARGUS about any employee, department, action, or risk..."
+            className="flex-1 bg-cyber-card border border-cyber-border rounded-lg px-3.5 py-2.5 text-xs text-cyber-text placeholder:text-cyber-muted focus:outline-none focus:border-cyber-primary/60 transition-colors"
           />
           <button
             type="submit"

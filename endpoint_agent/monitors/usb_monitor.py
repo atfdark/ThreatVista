@@ -21,8 +21,9 @@ class USBMonitor:
     POLL_SECONDS = 2
     DRIVE_REMOVABLE = 2  # DRIVE_REMOVABLE
 
-    def __init__(self, callback):
+    def __init__(self, callback, usb_blocker=None):
         self.callback = callback
+        self.usb_blocker = usb_blocker
         self._running = False
         self._thread = None
         self._known = {}
@@ -233,6 +234,12 @@ class USBMonitor:
                 current = self._scan()
                 for letter in current:
                     if letter not in self._known:
+                        # Intercept if USB is blocked
+                        if self.usb_blocker and self.usb_blocker.intercept_new_usb(letter, current[letter]):
+                            # The drive was ejected immediately. We still emit the insert
+                            # event so the SOC knows the user attempted to plug in a USB.
+                            pass
+                        
                         self._emit("insert", letter, current[letter])
                 for letter in self._known:
                     if letter not in current:

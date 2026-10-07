@@ -28,6 +28,7 @@ from backend.services.agent_service import (
     consume_enrollment_token,
     resolve_employee_by_email,
     is_online,
+    acknowledge_command,
 )
 from backend.services.command_service import request_command, list_commands, ALLOWED_COMMANDS
 from backend.services import action_request_service
@@ -2179,6 +2180,31 @@ def agent_heartbeat_endpoint(
     return {"heartbeat": "ok", "device": updated}
 
 
+class AgentCommandAckRequest(BaseModel):
+    device_id: str
+    command_id: int
+    result: Optional[str] = None
+
+
+@router.post("/agent/command/ack")
+def agent_command_ack(
+    payload: AgentCommandAckRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Agent acknowledges execution of a remote command.
+
+    Moves the command from 'Pending' -> 'Acknowledged' so it won't be
+    re-delivered on subsequent heartbeats.
+    """
+    if AGENT_API_KEY and request.headers.get("x-agent-key") != AGENT_API_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid agent key")
+    success = acknowledge_command(db, payload.command_id, result_detail=payload.result)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Command #{payload.command_id} not found")
+    return {"ack": "ok", "command_id": payload.command_id}
+
+
 @router.post("/employees/{employee_id}/commands")
 def create_command(
     employee_id: int,
@@ -2187,7 +2213,7 @@ def create_command(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(require_roles("admin", "analyst")),
 ):
-    """Issue a (simulated) remote command to an endpoint agent."""
+    """Issue a remote command to an endpoint agent (delivered via heartbeat)."""
     if payload.command not in ALLOWED_COMMANDS:
         raise HTTPException(
             status_code=400,
