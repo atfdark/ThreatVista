@@ -17,7 +17,10 @@ import os
 import shutil
 import hashlib
 from typing import Optional
-from backend.services.vault_encryption import VaultEncryptionEngine, TV_VAULT_MAGIC
+try:
+    from endpoint_agent.protection.vault_encryption import VaultEncryptionEngine, TV_VAULT_MAGIC
+except ImportError:
+    from .vault_encryption import VaultEncryptionEngine, TV_VAULT_MAGIC
 
 
 class ShadowVault:

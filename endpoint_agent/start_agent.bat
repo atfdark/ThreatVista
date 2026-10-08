@@ -10,7 +10,7 @@ REM    start_agent.bat https://xyz.ngrok-free.app (connect across different inte
 REM ============================================================
 setlocal
 
-REM Run from the folder containing this file (the project root)
+REM Run from the folder containing this file
 cd /d "%~dp0"
 
 REM Make sure Python is available
