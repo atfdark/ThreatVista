@@ -14,6 +14,7 @@ from endpoint_agent.utils.sender import (
     send_heartbeat,
     register_device_with_token,
     check_backend_health,
+    auto_discover_backend,
     set_backend_url,
     get_backend_url,
 )
@@ -80,13 +81,27 @@ class EndpointAgent:
         self._batcher.add(event_data)
 
     def _ensure_backend_connected(self) -> bool:
-        """Verify backend connectivity without prompting."""
+        """Verify backend connectivity, attempting auto-discovery if initial address fails."""
         if check_backend_health():
             return True
 
         current = get_backend_url()
+        print(f"\n[*] Configured backend ({current}) unreachable. Scanning for ThreatVista server...")
+        discovered = auto_discover_backend()
+        if discovered:
+            set_backend_url(discovered)
+            print(f"[+] Auto-discovered active ThreatVista backend at: {discovered}")
+            return True
+
         print(f"\n[!] Could not reach ThreatVista backend at: {current}")
-        print("    Ensure the backend is running and reachable.")
+        print("    ============================================================")
+        print("    TROUBLESHOOTING GUIDE:")
+        print("    1. On the host server machine, make sure the backend is running with:")
+        print("       python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000")
+        print("       (Binding to 0.0.0.0 is REQUIRED for LAN/Wi-Fi devices to connect)")
+        print("       (Or double-click 'start_backend.bat')")
+        print("    2. Ensure both machines are connected to the same Wi-Fi network.")
+        print("    ============================================================")
         return False
 
     def _register(self):

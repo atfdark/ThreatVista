@@ -99,6 +99,67 @@ def check_backend_health(target_url: str = None):
         return False
 
 
+def auto_discover_backend(port: int = 8000):
+    """Attempt to discover ThreatVista backend on localhost or local LAN subnet."""
+    import socket
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # 1. First check localhost candidates
+    for candidate in ["http://127.0.0.1:8000", "http://localhost:8000"]:
+        if check_backend_health(candidate):
+            return candidate
+
+    # 2. Derive subnets from network interfaces
+    subnets = set()
+    try:
+        hostname = socket.gethostname()
+        ip_list = socket.gethostbyname_ex(hostname)[2]
+        for ip in ip_list:
+            if not ip.startswith("127.") and not ip.startswith("169.254."):
+                parts = ip.split(".")
+                if len(parts) == 4:
+                    subnets.add(".".join(parts[:3]))
+    except Exception:
+        pass
+
+    # Also check the subnet of the currently configured backend URL
+    current_url = get_backend_url()
+    try:
+        import urllib.parse
+        host = urllib.parse.urlparse(current_url).hostname
+        if host and host.count(".") == 3 and not host.startswith("127."):
+            subnets.add(".".join(host.split(".")[:3]))
+    except Exception:
+        pass
+
+    def probe(ip_str):
+        candidate = f"http://{ip_str}:{port}"
+        try:
+            r = requests.get(f"{candidate}/api/status", timeout=0.8)
+            if r.status_code == 200 and "ThreatVista" in r.text:
+                return candidate
+        except Exception:
+            pass
+        return None
+
+    # Probe up to 254 addresses concurrently
+    candidates = []
+    for subnet in subnets:
+        for last_octet in range(1, 255):
+            candidates.append(f"{subnet}.{last_octet}")
+
+    if candidates:
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = [executor.submit(probe, ip) for ip in candidates]
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return res
+
+    return None
+
+
 def register_device_with_token(enrollment_token: str, device_info: dict):
     """Register this machine's device using a one-time enrollment token.
 
