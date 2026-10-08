@@ -59,7 +59,6 @@ export default function Sidebar() {
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { to: '/employees', label: 'Employees', icon: Users },
     { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: true },
     { to: '/incidents', label: 'Incidents', icon: ShieldAlert },
     { to: '/sessions', label: 'Active Sessions', icon: Laptop },

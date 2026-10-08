@@ -22,7 +22,7 @@ function App() {
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="sessions" element={<ActiveSessions />} />
-          <Route path="employees" element={<EmployeeProfile />} />
+          <Route path="employees" element={<Dashboard />} />
           <Route path="employees/:id" element={<EmployeeProfile />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="alerts" element={<Alerts />} />

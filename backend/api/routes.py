@@ -798,25 +798,33 @@ def get_employee_detail(
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    result = _run_ai(db, employee_id)
-    # Persist live DNA + risk history + correlation alerts so Behavior DNA and
-    # Historical Risk Progression stay current for self-registered employees
-    # who never got a seeded profile.
-    batch_service.persist_risk_and_correlations(db, employee_id, result)
-    incident_service.apply_risk(db, employee_id, result)
-    db.commit()
+    try:
+        result = _run_ai(db, employee_id)
+        # Persist live DNA + risk history + correlation alerts so Behavior DNA and
+        # Historical Risk Progression stay current for self-registered employees
+        # who never got a seeded profile.
+        batch_service.persist_risk_and_correlations(db, employee_id, result)
+        incident_service.apply_risk(db, employee_id, result)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        result = {}
 
     # Reload relationships after persistence so the response reflects the
     # freshly written Behavior DNA and risk history (risk/status may stay at
     # manual 0/Safe when stale-history guard skipped overwrite).
-    db.refresh(employee)
+    try:
+        db.refresh(employee)
+    except Exception:
+        pass
+
     employee.behavior_profile = (
         db.query(models.BehaviorProfile)
         .filter(models.BehaviorProfile.employee_id == employee_id)
         .first()
     )
     # Cap the stream sent to the UI — AI already ran over the full history.
-    all_events = sorted(employee.events, key=lambda x: x.timestamp or datetime.min, reverse=True)
+    all_events = sorted(employee.events or [], key=lambda x: x.timestamp or datetime.min, reverse=True)
     employee.events = all_events[:100]
     employee.risk_scores = sorted(
         db.query(models.RiskScore)
@@ -825,7 +833,10 @@ def get_employee_detail(
         .all(),
         key=lambda x: x.recorded_at,
     )
-    employee.ai_analysis = _build_analysis_response(db, employee_id, result)
+    try:
+        employee.ai_analysis = _build_analysis_response(db, employee_id, result)
+    except Exception:
+        employee.ai_analysis = None
 
     # Role baseline and last triggered rule
     employee.role_type = employee.role_type or "General"
@@ -855,27 +866,38 @@ def get_employee_detail(
         }
     else:
         employee.endpoint_health = None
-    employee.commands = list_commands(db, employee_id, limit=10)
+
+    try:
+        employee.commands = list_commands(db, employee_id, limit=10)
+    except Exception:
+        employee.commands = []
 
     # Current incident + resolution history (full timeline preserved in both).
-    employee.incident = incident_service.serialize(
-        db, incident_service.get_active_incident(db, employee_id)
-    )
-    employee.incident_history = [
-        incident_service.serialize(db, inc)
-        for inc in (
-            db.query(models.Incident)
-            .filter(
-                models.Incident.employee_id == employee_id,
-                models.Incident.status.in_([
-                    incident_service.STATUS_RESOLVED,
-                    incident_service.STATUS_ARCHIVED,
-                ]),
-            )
-            .order_by(models.Incident.created_at.desc(), models.Incident.id.desc())
-            .all()
+    try:
+        employee.incident = incident_service.serialize(
+            db, incident_service.get_active_incident(db, employee_id)
         )
-    ]
+    except Exception:
+        employee.incident = None
+
+    try:
+        employee.incident_history = [
+            incident_service.serialize(db, inc)
+            for inc in (
+                db.query(models.Incident)
+                .filter(
+                    models.Incident.employee_id == employee_id,
+                    models.Incident.status.in_([
+                        incident_service.STATUS_RESOLVED,
+                        incident_service.STATUS_ARCHIVED,
+                    ]),
+                )
+                .order_by(models.Incident.created_at.desc(), models.Incident.id.desc())
+                .all()
+            )
+        ]
+    except Exception:
+        employee.incident_history = []
 
     return employee
 

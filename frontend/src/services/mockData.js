@@ -141,7 +141,8 @@ export const api = {
     try {
       const res = await http.get(`/employees/${id}`);
       return res.data;
-    } catch {
+    } catch (err) {
+      console.error(`Failed to load employee #${id} detail from backend:`, err);
       return emptyEmployeeDetail(id);
     }
   },

@@ -80,44 +80,14 @@ class EndpointAgent:
         self._batcher.add(event_data)
 
     def _ensure_backend_connected(self) -> bool:
-        """Verify backend connectivity. If unreachable, prompt the user for the new IP/URL."""
+        """Verify backend connectivity without prompting."""
         if check_backend_health():
             return True
 
         current = get_backend_url()
         print(f"\n[!] Could not reach ThreatVista backend at: {current}")
-        print("    The server IP may have changed, or you are connected to a different network.")
-        print("    Hints:")
-        print("      * Same Wi-Fi : Enter the server laptop's new IP (e.g. http://10.157.56.246:8000)")
-        print("      * Remote / WAN: Enter your ngrok/tunnel URL (e.g. https://xyz.ngrok-free.app)")
-
-        while True:
-            try:
-                user_input = input("\n[?] Enter new Backend IP/URL (Press Enter to retry current, 'q' to quit): ").strip()
-            except (KeyboardInterrupt, EOFError):
-                return False
-
-            if user_input.lower() in ("q", "quit", "exit"):
-                return False
-
-            if user_input:
-                candidate = user_input
-                if not (candidate.startswith("http://") or candidate.startswith("https://")):
-                    candidate = f"http://{candidate}"
-                print(f"[*] Testing connection to {candidate}...")
-                if check_backend_health(candidate):
-                    set_backend_url(candidate)
-                    enrollment.update_device_backend_url(candidate)
-                    print(f"[+] Successfully connected to {candidate}!")
-                    return True
-                else:
-                    print(f"[-] Still cannot reach {candidate}. Ensure backend is running and reachable.")
-            else:
-                print(f"[*] Retrying connection to {get_backend_url()}...")
-                if check_backend_health():
-                    print("[+] Backend connected.")
-                    return True
-                print("[-] Unreachable.")
+        print("    Ensure the backend is running and reachable.")
+        return False
 
     def _register(self):
         """Resolve this machine's device + employee identity."""

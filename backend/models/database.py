@@ -34,7 +34,7 @@ class Employee(Base):
     uba_profile = relationship("UserBehaviorProfile", back_populates="employee", uselist=False, cascade="all, delete-orphan")
     anomalies = relationship("BehavioralAnomalyLog", back_populates="employee", cascade="all, delete-orphan")
     devices = relationship("Device", back_populates="employee", uselist=False, cascade="all, delete-orphan")
-    commands = relationship("RemoteCommand", back_populates="employee", cascade="all, delete-orphan")
+    remote_commands = relationship("RemoteCommand", back_populates="employee", cascade="all, delete-orphan")
     incidents = relationship("Incident", back_populates="employee", cascade="all, delete-orphan")
     enrollment_tokens = relationship("AgentEnrollmentToken", back_populates="employee", cascade="all, delete-orphan")
     action_requests = relationship("ActionRequest", back_populates="employee", cascade="all, delete-orphan")
@@ -233,7 +233,7 @@ class RemoteCommand(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
-    employee = relationship("Employee", back_populates="commands")
+    employee = relationship("Employee", back_populates="remote_commands")
 
 
 class SeedState(Base):
